@@ -1,5 +1,5 @@
-import { LitElement, html, css, PropertyValueMap } from "lit";
-import { customElement, property, state, eventOptions } from "lit/decorators.js";
+import { LitElement, html, css } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
 import { ref, createRef } from "lit/directives/ref.js";
 import { DateTime } from "luxon";
 
@@ -11,12 +11,12 @@ interface Marker {
 
 @customElement("timeline-component")
 export class TimelineComponent extends LitElement {
-    // --- Properties ---
-    @property({ type: Number })
-    public zoomLevel = 1; // 1 = 100px/hour, 2 = 200px/hour, etc.
 
     @property({ type: String })
     public currentTime: string = DateTime.now().toISO();
+
+    @property({ type: Number })
+    public playerTime: number = 0; // in seconds
 
     @property({ type: Array })
     public markers: Marker[] = [];
@@ -26,13 +26,10 @@ export class TimelineComponent extends LitElement {
 
     // --- State ---
     @state()
-    private scrollPosition = 0; // in pixels
+    private leftOffset = 0; // in pixels
 
     @state()
     private isDragging = false;
-
-    @state()
-    private dragStartX = 0;
 
     @state()
     private timelineWidth = 2400; // Default: 24 hours * 100px/hour
@@ -43,6 +40,12 @@ export class TimelineComponent extends LitElement {
 
     // --- Constants ---
     private readonly baseZoomLevel = 100; // Pixels per hour at zoom level 1
+    private readonly minZoomLevel = document.documentElement.clientWidth / 24 / this.baseZoomLevel;
+    private readonly maxZoomLevel = document.documentElement.clientWidth / this.baseZoomLevel;
+
+    // --- Properties ---
+    @property({ type: Number })
+    public zoomLevel = this.minZoomLevel; // 1 = 100px/hour, 2 = 200px/hour, etc.
 
     // --- Lifecycle ---
     connectedCallback() {
@@ -55,87 +58,66 @@ export class TimelineComponent extends LitElement {
         this.removeKeyboardListeners();
     }
 
-    protected updated(changedProperties: PropertyValueMap<any> | Map<PropertyKey, unknown>): void {
-        super.updated(changedProperties);
-
-        if (changedProperties.has("zoomLevel")) {
-            this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-            this.updateScrollPositionToTime();
-        }
-        if (changedProperties.has("selectedDate")) {
-            this.updateScrollPositionToTime();
-        }
-    }
-
     // --- Event Listeners ---
     private handleMouseDown(event: MouseEvent) {
-        this.isDragging = true;
-        this.dragStartX = event.clientX;
-        this.style.cursor = "grabbing"; // Change cursor
-        if (this.timelineContainerRef.value) {
-            this.timelineContainerRef.value.style.cursor = "grabbing";
+        const timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+        const actualOffset = event.clientX + this.leftOffset;
+        const percentage = Math.min(1.0, Math.max(0.0, actualOffset / timelineWidth));
+        const totalSecondsInDay = 24 * 60 * 60;
+        this.playerTime = totalSecondsInDay * percentage;
+        if (Number.isNaN(this.playerTime)) {
+            this.playerTime = 0.0;
         }
-        document.addEventListener("mousemove", this.handleMouseMove);
-        document.addEventListener("mouseup", this.handleMouseUp);
+        // console.log(this.dragStartX, this.leftOffset);
     }
 
-    private handleMouseMove(event: MouseEvent) {
-        if (!this.isDragging) return;
-        const deltaX = event.clientX - this.dragStartX;
-        this.scrollPosition -= deltaX;
-        this.dragStartX = event.clientX;
-        this.requestUpdate(); // Ensure the DOM updates
-    }
+    private handleZoom(newZoomLevel: number) {
+        console.log(this.minZoomLevel, newZoomLevel, this.zoomLevel, this.maxZoomLevel);
+        const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+        const playerTimeInPercentage = this.playerTime / (24 * 60 * 60);
+        // pixels from the left of the screen the current time marker is at.
+        const offsetFromLeftScreen =
+            originalTimelineWidth * playerTimeInPercentage - this.offsetLeft;
 
-    private handleMouseUp() {
-        this.isDragging = false;
-        this.style.cursor = "default"; // Restore cursor
-        if (this.timelineContainerRef.value) {
-            this.timelineContainerRef.value.style.cursor = "default";
+        const originalZoomLevel = this.zoomLevel;
+        const clampedNewZoomLevel = Math.max(
+            this.minZoomLevel,
+            Math.min(this.maxZoomLevel, newZoomLevel)
+        );
+        if (originalZoomLevel === clampedNewZoomLevel) {
+            return;
         }
-        document.removeEventListener("mousemove", this.handleMouseMove);
-        document.removeEventListener("mouseup", this.handleMouseUp);
+        console.log("new zoom", clampedNewZoomLevel);
+        this.zoomLevel = clampedNewZoomLevel;
+
+        this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+        const newTotalLeftOffset = this.timelineWidth * playerTimeInPercentage;
+        this.leftOffset = Math.max(newTotalLeftOffset - offsetFromLeftScreen, 0.0);
+
+        // Calculate the new scroll position to keep the current time at the zoom center
+        // this.scrollPosition = currentTimePosition - containerRect.width * zoomCenter;
     }
 
     private handleWheel(event: WheelEvent) {
         event.preventDefault(); // Prevent page scroll
         const containerRect = this.timelineContainerRef.value?.getBoundingClientRect();
-
-        // Horizontal scrolling with Shift key
-        if (event.shiftKey) {
-            this.scrollPosition += event.deltaY; // Use deltaY for horizontal scroll
-            this.scrollPosition = Math.max(0, this.scrollPosition); // Basic bounds
+        if (!containerRect) {
+            return;
         }
-        // Vertical scrolling for zooming
-        else if (containerRect) {
-            const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
-            const previousZoomLevel = this.zoomLevel;
-            this.zoomLevel = Math.max(0.1, Math.min(10, this.zoomLevel * zoomFactor));
-            this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
 
-            // Calculate zoom center relative to the viewport
-            const zoomCenter = (event.clientX - containerRect.left) / containerRect.width;
-            const currentTimePosition = this.getTimelinePosition(
-                this.selectedDate + "T" + this.currentTime
-            );
-
-            // Calculate the new scroll position to keep the current time at the zoom center
-            this.scrollPosition = currentTimePosition - containerRect.width * zoomCenter;
-
-            this.updateScrollPositionToTime();
-            this.requestUpdate();
-        }
+        const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+        this.handleZoom(zoomFactor * this.zoomLevel);
     }
 
     private handleKeyDown(event: KeyboardEvent) {
         switch (event.key) {
             case "a": // Scroll left
             case "ArrowLeft":
-                this.scrollPosition -= 50;
+                this.leftOffset -= 50;
                 break;
             case "d": // Scroll right
             case "ArrowRight":
-                this.scrollPosition += 50;
+                this.leftOffset += 50;
                 break;
             case "w": // Zoom in
             case "ArrowUp": {
@@ -150,8 +132,8 @@ export class TimelineComponent extends LitElement {
                     const currentTimePosition = this.getTimelinePosition(
                         this.selectedDate + "T" + this.currentTime
                     );
-                    this.scrollPosition = currentTimePosition - containerRect.width * zoomCenter;
-                    this.updateScrollPositionToTime();
+                    this.leftOffset = currentTimePosition - containerRect.width * zoomCenter;
+                    // this.updateScrollPositionToTime();
                 }
                 break;
             }
@@ -167,8 +149,8 @@ export class TimelineComponent extends LitElement {
                     const currentTimePosition = this.getTimelinePosition(
                         this.selectedDate + "T" + this.currentTime
                     );
-                    this.scrollPosition = currentTimePosition - containerRect.width * zoomCenter;
-                    this.updateScrollPositionToTime();
+                    this.leftOffset = currentTimePosition - containerRect.width * zoomCenter;
+                    // this.updateScrollPositionToTime();
                 }
                 break;
             }
@@ -193,19 +175,15 @@ export class TimelineComponent extends LitElement {
         return diffInMinutes * ((this.baseZoomLevel * this.zoomLevel) / 60);
     }
 
-    private formatTime(date: string) {
-        return DateTime.fromISO(date).toFormat("HH:mm");
-    }
-
-    private updateScrollPositionToTime() {
-        const currentTimeInMinutes = DateTime.fromISO(
-            this.selectedDate + "T" + this.currentTime
-        ).diff(DateTime.fromISO(this.selectedDate), "minutes").minutes;
-        this.scrollPosition =
-            currentTimeInMinutes * ((this.baseZoomLevel * this.zoomLevel) / 60) -
-            this.offsetWidth / 4;
-        this.scrollPosition = Math.max(0, this.scrollPosition);
-    }
+    // private updateScrollPositionToTime() {
+    //     const currentTimeInMinutes = DateTime.fromISO(
+    //         this.selectedDate + "T" + this.currentTime
+    //     ).diff(DateTime.fromISO(this.selectedDate), "minutes").minutes;
+    //     this.scrollPosition =
+    //         currentTimeInMinutes * ((this.baseZoomLevel * this.zoomLevel) / 60) -
+    //         this.offsetWidth / 4;
+    //     this.scrollPosition = Math.max(0, this.scrollPosition);
+    // }
 
     private createCurrentTimeIndicator() {
         return html` <div
@@ -225,6 +203,30 @@ export class TimelineComponent extends LitElement {
                 class="current-time-text"
                 style="position: absolute; top: 0; left: 5px; color: black; font-size: 0.8em; white-space: nowrap;"
                 >${this.currentTime}</span
+            >
+        </div>`;
+    }
+
+    private createPlayerTimeIndicator() {
+        const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+        const playerTimeInPercentage = this.playerTime / (24 * 60 * 60);
+        const leftOffset = originalTimelineWidth * playerTimeInPercentage;
+        return html` <div
+            class="current-time-indicator"
+            style="
+                            position: absolute;
+                            left: ${leftOffset}px;
+                            top: 0;
+                            height: 100%;
+                            border-left: 2px solid black;
+                            z-index: 10;
+                            width: 4px;
+                        "
+        >
+            <span
+                class="current-time-text"
+                style="position: absolute; top: 0; left: 5px; color: black; font-size: 0.8em; white-space: nowrap;"
+                >${this.playerTime}</span
             >
         </div>`;
     }
@@ -321,12 +323,13 @@ export class TimelineComponent extends LitElement {
                         position: relative;
                         width: ${this.timelineWidth}px;
                         height: 100px;
-                        transform: translateX(${-this.scrollPosition}px);
+                        transform: translateX(${-this.leftOffset}px);
                         transition: transform 0.1s ease-out;
                         background-color: #f0f0f0;
                     "
                 >
                     ${this.createHourMinuteIndicators()} ${this.createCurrentTimeIndicator()}
+                    ${this.createPlayerTimeIndicator()}
                 </div>
             </div>
         `;
