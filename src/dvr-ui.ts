@@ -38,7 +38,7 @@ interface DayVideoImageData {
 type DateStringIsoDate = string;
 interface CamEntry {
     name: string;
-    dates: { [dateStr: DateStringIsoDate]: DayVideoImageData};
+    dates: { [dateStr: DateStringIsoDate]: DayVideoImageData };
 }
 
 type CamData = { [camName: string]: CamEntry };
@@ -117,93 +117,25 @@ export class DvrUI extends LitElement {
             height: 100vh;
             font-family: sans-serif;
         }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            width: 100vw;
+         }
+        .player {
+            display: flex;
+            width: 100%;
+            flex: 1;
+        }
         .controls {
             display: flex;
             flex-wrap: wrap;
             gap: 16px;
             margin-bottom: 16px;
             align-items: center; /* Vertically align items */
-        }
-        .recordings-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 16px;
-        }
-        .recording-card {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            background-color: white;
-        }
-        .recording-thumbnail {
-            width: 100%;
-            height: 120px;
-            object-fit: cover;
-            border-radius: 4px;
-        }
-        .timeline-container {
-            width: 100%;
-            height: 100px;
-            background-color: #f0f0f0;
-            border-radius: 8px;
-            margin-top: 16px;
-            position: relative; /* Make sure the timeline container is a positioning context */
-            overflow: hidden;
-            border: 1px solid #ccc;
-        }
-
-        .timeline {
-            position: absolute; /* Allows for absolute positioning of elements within */
-            top: 0;
-            left: 0;
-            width: 2400px; /* 24 hours * 100px per hour */
-            height: 100%;
-            display: flex;
-        }
-
-        .timeline-hour {
-            flex: 0 0 100px; /* Each hour is 100px wide */
-            height: 100%;
-            border-right: 1px solid #ccc;
-            display: flex; /* For aligning the hour label */
-            align-items: center;
-            justify-content: center;
-            font-size: 0.7em;
-            color: #666;
-        }
-
-        .recording-bar {
-            position: absolute;
-            background-color: rgba(0, 123, 255, 0.7); /* Blue with opacity */
-            height: 30px;
-            top: 35px; /* Position in the middle of the timeline */
-            border-radius: 4px;
-            pointer-events: all; /* Important: Make sure the bar is clickable */
-            cursor: pointer;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-        }
-
-        .recording-bar:hover {
-            background-color: rgba(0, 123, 255, 0.9);
-        }
-
-        .current-time-indicator {
-            position: absolute;
-            top: 0;
-            height: 100%;
-            border-left: 2px solid red;
-            pointer-events: none; /* Important: Allows clicks to go through */
-            z-index: 10;
-        }
-
-        .current-time-text {
-            position: absolute;
-            top: 0;
-            left: 5px;
-            color: red;
-            font-size: 0.8em;
-            white-space: nowrap;
         }
 
         .controls select,
@@ -270,16 +202,18 @@ export class DvrUI extends LitElement {
             dayTimes.add(dayStr);
         }
 
-        const minDate = DateTime.min(
-            ...[...dayTimes.values()]
-                .map((dateStr) => DateTime.fromISO(dateStr))
-                .filter((date) => date.isValid)
-        ) ?? DateTime.now().startOf('day');
-        const maxDate = DateTime.max(
-            ...[...dayTimes.values()]
-                .map((dateStr) => DateTime.fromISO(dateStr))
-                .filter((date) => date.isValid)
-        ) ?? DateTime.now().startOf('day');
+        const minDate =
+            DateTime.min(
+                ...[...dayTimes.values()]
+                    .map((dateStr) => DateTime.fromISO(dateStr))
+                    .filter((date) => date.isValid)
+            ) ?? DateTime.now().startOf("day");
+        const maxDate =
+            DateTime.max(
+                ...[...dayTimes.values()]
+                    .map((dateStr) => DateTime.fromISO(dateStr))
+                    .filter((date) => date.isValid)
+            ) ?? DateTime.now().startOf("day");
 
         return html`<label for="date">Date:</label>
             <input
@@ -300,18 +234,24 @@ export class DvrUI extends LitElement {
     // Render
     render() {
         return html`
-            <h1>DVR UI</h1>
+            <div class="container">
+                <h1>DVR UI</h1>
 
-            <div class="controls">
-                ${this._initialFetch.render({
-                    initial: () => html`<p>Waiting to start task</p>`,
-                    pending: () => html`<p>Running task...</p>`,
-                    complete: (value) => this.renderCameraData(value.message),
-                    error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
-                })}
+                <div class="controls">
+                    ${this._initialFetch.render({
+                        initial: () => html`<p>Waiting to start task</p>`,
+                        pending: () => html`<p>Running task...</p>`,
+                        complete: (value) => this.renderCameraData(value.message),
+                        error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
+                    })}
+                </div>
+
+                <div class="player">
+                    player
+                </div>
+
+                <timeline-component></timeline-component>
             </div>
-
-            <timeline-component></timeline-component>
         `;
     }
 }
