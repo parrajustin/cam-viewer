@@ -1,21 +1,8 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { DateTime } from "luxon";
+import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { Task, TaskStatus } from "@lit/task";
-
-// Mock Data & Types (Replace with actual data fetching)
-interface Camera {
-    id: string;
-    name: string;
-}
-
-interface Recording {
-    id: string;
-    cameraId: string;
-    startTime: string; // ISO 8601
-    endTime: string; // ISO 8601
-    thumbnail: string; // URL
-}
+import { TimeRanges } from "./timeline-component";
 
 type IsoTime = string;
 
@@ -42,40 +29,11 @@ interface CamEntry {
 
 type CamData = { [camName: string]: CamEntry };
 
-const generateMockRecordings = (cameras: Camera[], days: number): Recording[] => {
-    const recordings: Recording[] = [];
-    const now = DateTime.now();
-
-    for (let i = 0; i < days; i++) {
-        const date = now.minus({ days: i });
-        cameras.forEach((camera) => {
-            // Generate a few recordings per camera per day
-            const numRecordings = Math.floor(Math.random() * 3) + 1; // 1-3 recordings
-            for (let j = 0; j < numRecordings; j++) {
-                const startHour = Math.floor(Math.random() * 24);
-                const startMinute = Math.floor(Math.random() * 60);
-                const duration = Math.floor(Math.random() * 120) + 30; // 30-150 minutes
-
-                const startTime = date
-                    .set({ hour: startHour, minute: startMinute, second: 0 })
-                    .toISO();
-                const endTime = date
-                    .set({ hour: startHour, minute: startMinute, second: 0 })
-                    .plus({ minutes: duration })
-                    .toISO();
-
-                recordings.push({
-                    id: `${camera.id}-${date.toFormat("yyyyMMdd")}-${j}`,
-                    cameraId: camera.id,
-                    startTime,
-                    endTime,
-                    thumbnail: `https://via.placeholder.com/150?text=${camera.name}+${date.toFormat("HH:mm")}` // Placeholder
-                });
-            }
-        });
-    }
-    return recordings;
-};
+// Set the default timezone
+Settings.defaultZone = "America/Denver";
+function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
+    return DateTime.fromISO(dateTimeString);
+}
 
 @customElement("dvr-ui")
 export class DvrUI extends LitElement {
@@ -196,8 +154,17 @@ export class DvrUI extends LitElement {
         console.log(sourceArray);
 
         return html`
-            <video width="auto" height="100%" controls crossorigin="anonymous" style="max-height: 100%">
-                ${sourceArray.map((source) => html`<source src="http://localhost:8070${source}" type="video/mp4" />`)}
+            <video
+                width="auto"
+                height="100%"
+                controls
+                crossorigin="anonymous"
+                style="max-height: 100%"
+            >
+                ${sourceArray.map(
+                    (source) =>
+                        html`<source src="http://localhost:8070${source}" type="video/mp4" />`
+                )}
                 Your browser does not support the video tag.
             </video>
         `;
@@ -222,7 +189,7 @@ export class DvrUI extends LitElement {
         // The corrected day times in our time zone.
         const dayTimes = new Set<string>();
         for (const timeStr of timeStrings) {
-            const date = DateTime.fromISO(timeStr);
+            const date = parseFromIso(timeStr);
             if (!date.isValid) {
                 continue;
             }
@@ -234,13 +201,13 @@ export class DvrUI extends LitElement {
         const minDate =
             DateTime.min(
                 ...[...dayTimes.values()]
-                    .map((dateStr) => DateTime.fromISO(dateStr))
+                    .map((dateStr) => parseFromIso(dateStr))
                     .filter((date) => date.isValid)
             ) ?? DateTime.now().startOf("day");
         const maxDate =
             DateTime.max(
                 ...[...dayTimes.values()]
-                    .map((dateStr) => DateTime.fromISO(dateStr))
+                    .map((dateStr) => parseFromIso(dateStr))
                     .filter((date) => date.isValid)
             ) ?? DateTime.now().startOf("day");
 
@@ -271,6 +238,58 @@ export class DvrUI extends LitElement {
             </select>`;
     }
 
+    private renderTimeline(data: CamData) {
+        const camera = data[this.selectedCameraId];
+        if (camera === undefined) {
+            return html`NO SELECTED CAMERA`;
+        }
+
+        const timeData = camera.dates[this.selectedDate];
+        if (timeData === undefined) {
+            return html`No data for selected date`;
+        }
+
+        const videoTimes: DateTime<true>[] = [];
+        for (const time of timeData.videos) {
+            for (const day of time.videos) {
+                console.log("video", day.timeOfVideoStart)
+                const parsedDate = parseFromIso(day.timeOfVideoStart);
+                if (parsedDate.isValid) {
+                    videoTimes.push(parsedDate);
+                }
+            }
+        }
+
+        console.log("videoTimes", videoTimes);
+        videoTimes.sort((a, b) => a.toSeconds() - b.toSeconds());
+
+        const timeRanges: TimeRanges[] = [];
+        let currentTimeRange: TimeRanges | undefined;
+        const createNewTimeRange = (date: DateTime<true>) => {
+            console.log("created new time");
+            currentTimeRange = {
+                start: date,
+                end: date.plus({ minute: 1 })
+            };
+        };
+        for (const time of videoTimes) {
+            if (currentTimeRange === undefined) {
+                createNewTimeRange(time);
+            } else if (currentTimeRange.end.equals(time)) {
+                currentTimeRange.end = time.plus({ minute: 1 });
+            } else {
+                console.log("pushing", currentTimeRange);
+                timeRanges.push(currentTimeRange);
+                createNewTimeRange(time);
+            }
+        }
+        if (currentTimeRange !== undefined) {
+            timeRanges.push(currentTimeRange);
+        }
+        console.log("end timeRanges", timeRanges);
+        return html`<timeline-component .selectedDate="${this.selectedDate}" .availableTimeRanges="${timeRanges}"></timeline-component>`
+    }
+
     // Render
     render() {
         return html`
@@ -295,7 +314,12 @@ export class DvrUI extends LitElement {
                     })}
                 </div>
 
-                <timeline-component></timeline-component>
+                ${this._initialFetch.render({
+                    initial: () => html`<timeline-component></timeline-component>`,
+                    pending: () => html`<timeline-component></timeline-component>`,
+                    complete: (value) => this.renderTimeline(value.message),
+                    error: () => html`<timeline-component></timeline-component>`
+                })}
             </div>
         `;
     }

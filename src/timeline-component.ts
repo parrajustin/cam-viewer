@@ -1,7 +1,7 @@
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ref, createRef } from "lit/directives/ref.js";
-import { DateTime } from "luxon";
+import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 
 interface Marker {
     time: string; // ISO 8601
@@ -9,9 +9,21 @@ interface Marker {
     color?: string;
 }
 
+export interface TimeRanges {
+    start: DateTime<true>; // in seconds
+    end: DateTime<true>; // in seconds
+}
+
+const SECONDS_IN_DAY = 24 * 60 * 60;
+
+// Set the default timezone
+Settings.defaultZone = "America/Denver";
+function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
+    return DateTime.fromISO(dateTimeString);
+}
+
 @customElement("timeline-component")
 export class TimelineComponent extends LitElement {
-
     @property({ type: String })
     public currentTime: string = DateTime.now().toISO();
 
@@ -23,6 +35,9 @@ export class TimelineComponent extends LitElement {
 
     @property({ type: String })
     public selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
+
+    @property({ type: Array })
+    public availableTimeRanges: TimeRanges[] = [];
 
     // --- State ---
     @state()
@@ -40,8 +55,9 @@ export class TimelineComponent extends LitElement {
 
     // --- Constants ---
     private readonly baseZoomLevel = 100; // Pixels per hour at zoom level 1
+    // Min zoom level is the entire width takes up the full width of the screen.
     private readonly minZoomLevel = document.documentElement.clientWidth / 24 / this.baseZoomLevel;
-    private readonly maxZoomLevel = document.documentElement.clientWidth / this.baseZoomLevel;
+    private readonly maxZoomLevel = document.documentElement.clientWidth / (this.baseZoomLevel / 6);
 
     // --- Properties ---
     @property({ type: Number })
@@ -169,8 +185,8 @@ export class TimelineComponent extends LitElement {
 
     // --- Helper Functions ---
     private getTimelinePosition(isoTime: string): number {
-        const recordingTime = DateTime.fromISO(isoTime);
-        const selectedDateTime = DateTime.fromISO(this.selectedDate);
+        const recordingTime = parseFromIso(isoTime);
+        const selectedDateTime = parseFromIso(this.selectedDate);
         const diffInMinutes = recordingTime.diff(selectedDateTime, "minutes").minutes;
         return diffInMinutes * ((this.baseZoomLevel * this.zoomLevel) / 60);
     }
@@ -304,8 +320,33 @@ export class TimelineComponent extends LitElement {
         );
     }
 
+    private createAvailableTimeRange() {
+        const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+        const timelineDay = DateTime.fromFormat(this.selectedDate, "yyyy-MM-dd");
+        console.log("timelineDay", this.selectedDate);
+
+        const ranges: TemplateResult[] = [];
+        for (const range of this.availableTimeRanges) {
+            const timeInPercentage =
+                range.start.diff(range.end, "seconds").seconds / SECONDS_IN_DAY;
+            const widthOfRange =
+                Math.max(1.0, originalTimelineWidth * Math.min(1.0, Math.max(0.0, timeInPercentage)));
+            const leftTimeInPercentage =
+                range.start.diff(timelineDay, "seconds").seconds / SECONDS_IN_DAY;
+            const leftOffset =
+                originalTimelineWidth * Math.min(1.0, Math.max(0.0, leftTimeInPercentage));
+            ranges.push(html`
+                <div
+                    style="position: absolute; left: ${leftOffset}px; width: ${widthOfRange}px; height: 20px; background-color: green;"
+                ></div>
+            `);
+        }
+        return ranges;
+    }
+
     // --- Render ---
     render() {
+        console.log("this.availableTimeRanges", this.availableTimeRanges, );
         // const hourWidth = this.baseZoomLevel * this.zoomLevel;
         // const showSeconds = this.zoomLevel > 4; // Adjust as needed
         return html`
@@ -328,8 +369,8 @@ export class TimelineComponent extends LitElement {
                         background-color: #f0f0f0;
                     "
                 >
-                    ${this.createHourMinuteIndicators()} ${this.createCurrentTimeIndicator()}
-                    ${this.createPlayerTimeIndicator()}
+                    ${this.createAvailableTimeRange()} ${this.createHourMinuteIndicators()}
+                    ${this.createCurrentTimeIndicator()} ${this.createPlayerTimeIndicator()}
                 </div>
             </div>
         `;
