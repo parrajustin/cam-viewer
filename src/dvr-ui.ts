@@ -29,7 +29,6 @@ interface HourVideoImageData {
     videos: VideoEntryData[];
 }
 
-type HourStr = string;
 interface DayVideoImageData {
     dayStart: IsoTime;
     videos: HourVideoImageData[];
@@ -38,7 +37,7 @@ interface DayVideoImageData {
 type DateStringIsoDate = string;
 interface CamEntry {
     name: string;
-    dates: { [dateStr: DateStringIsoDate]: DayVideoImageData };
+    dates: Record<DateStringIsoDate, DayVideoImageData>;
 }
 
 type CamData = { [camName: string]: CamEntry };
@@ -124,11 +123,12 @@ export class DvrUI extends LitElement {
             justify-content: center;
             height: 100vh;
             width: 100vw;
-         }
+        }
         .player {
             display: flex;
             width: 100%;
             flex: 1;
+            overflow: hidden;
         }
         .controls {
             display: flex;
@@ -163,15 +163,44 @@ export class DvrUI extends LitElement {
     `;
 
     // Handle date change
-    private handleDateChange(event: Event) {
-        // this.selectedDate = event.target.value;
-        console.log("date change", event);
+    private handleDateChange(event: InputEvent) {
+        this.selectedDate = (event.target as HTMLInputElement | null)?.value ?? this.selectedDate;
+        // console.log("date change", event.target);
     }
 
     // Handle camera change
-    private handleCameraChange(event: Event) {
-        // this.selectedCamera = event.target.value;
-        console.log("handleCameraChange", event);
+    private handleCameraChange(event: InputEvent) {
+        this.selectedCameraId =
+            (event.target as HTMLInputElement | null)?.value ?? this.selectedCameraId;
+        // console.log("handleCameraChange", event);
+    }
+
+    private renderVideoPlayer(data: CamData) {
+        const camera = data[this.selectedCameraId];
+        if (camera === undefined) {
+            return html`NO SELECTED CAMERA`;
+        }
+
+        const timeData = camera.dates[this.selectedDate];
+        if (timeData === undefined) {
+            return html`No data for selected date`;
+        }
+
+        const sourceArray: string[] = [];
+        for (const hourVideoData of timeData.videos) {
+            for (const video of hourVideoData.videos) {
+                sourceArray.push(video.path);
+            }
+        }
+
+        console.log(sourceArray);
+
+        return html`
+            <video width="auto" height="100%" controls crossorigin="anonymous" style="max-height: 100%">
+                ${sourceArray.map((source) => html`<source src="http://localhost:8070${source}" type="video/mp4" />`)}
+                Your browser does not support the video tag.
+            </video>
+        `;
     }
 
     private renderCameraData(data: CamData) {
@@ -215,6 +244,9 @@ export class DvrUI extends LitElement {
                     .filter((date) => date.isValid)
             ) ?? DateTime.now().startOf("day");
 
+        if (camNames.length > 0) {
+            this.selectedCameraId = camNames[0];
+        }
         return html`<label for="date">Date:</label>
             <input
                 type="date"
@@ -227,7 +259,15 @@ export class DvrUI extends LitElement {
 
             <label for="camera">Camera:</label>
             <select id="camera" @change="${this.handleCameraChange}">
-                ${camNames.map((camera) => html` <option value="${camera}">${camera}</option> `)}
+                ${camNames.map(
+                    (camera) =>
+                        html`<option
+                            value="${camera}"
+                            selected="${camera === this.selectedCameraId}"
+                        >
+                            ${camera}
+                        </option>`
+                )}
             </select>`;
     }
 
@@ -247,7 +287,12 @@ export class DvrUI extends LitElement {
                 </div>
 
                 <div class="player">
-                    player
+                    ${this._initialFetch.render({
+                        initial: () => html`<p>Waiting to start task</p>`,
+                        pending: () => html`<p>Running task...</p>`,
+                        complete: (value) => this.renderVideoPlayer(value.message),
+                        error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
+                    })}
                 </div>
 
                 <timeline-component></timeline-component>
