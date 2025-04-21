@@ -60,7 +60,7 @@ export class TimelineComponent extends LitElement {
     private readonly maxZoomLevel = document.documentElement.clientWidth / (this.baseZoomLevel / 6);
 
     // --- Properties ---
-    @property({ type: Number })
+    @state()
     public zoomLevel = this.minZoomLevel; // 1 = 100px/hour, 2 = 200px/hour, etc.
 
     // --- Lifecycle ---
@@ -87,31 +87,106 @@ export class TimelineComponent extends LitElement {
         // console.log(this.dragStartX, this.leftOffset);
     }
 
-    private handleZoom(newZoomLevel: number) {
-        console.log(this.minZoomLevel, newZoomLevel, this.zoomLevel, this.maxZoomLevel);
-        const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-        const playerTimeInPercentage = this.playerTime / (24 * 60 * 60);
-        // pixels from the left of the screen the current time marker is at.
-        const offsetFromLeftScreen =
-            originalTimelineWidth * playerTimeInPercentage - this.offsetLeft;
+    // private handleZoom(newZoomLevel: number) {
+    //     console.log(this.minZoomLevel, newZoomLevel, this.zoomLevel, this.maxZoomLevel);
+    //     const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+    //     const playerTimeInPercentage = this.playerTime / (24 * 60 * 60);
+    //     // pixels from the left of the screen the current time marker is at.
+    //     const offsetFromLeftScreen =
+    //         originalTimelineWidth * playerTimeInPercentage - this.offsetLeft;
+        
 
+    //     const originalZoomLevel = this.zoomLevel;
+    //     const clampedNewZoomLevel = Math.max(
+    //         this.minZoomLevel,
+    //         Math.min(this.maxZoomLevel, newZoomLevel)
+    //     );
+    //     if (originalZoomLevel === clampedNewZoomLevel) {
+    //         return;
+    //     }
+    //     console.log("new zoom", clampedNewZoomLevel);
+    //     this.zoomLevel = clampedNewZoomLevel;
+
+    //     this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
+    //     const newTotalLeftOffset = this.timelineWidth * playerTimeInPercentage;
+    //     this.leftOffset = Math.max(newTotalLeftOffset - offsetFromLeftScreen, 0.0);
+    // }
+
+    private handleZoom(newZoomLevel: number) {
+        // Get container width for clamping scroll offset later
+        const containerWidth = this.timelineContainerRef.value?.clientWidth ?? 0;
+        if (containerWidth === 0) {
+            console.warn("Timeline container has no width.");
+            return; // Cannot calculate zoom correctly without container width
+        }
+
+        // --- Store original values ---
         const originalZoomLevel = this.zoomLevel;
+        const originalTimelineWidth = 24 * this.baseZoomLevel * originalZoomLevel;
+
+        // --- Clamp the new zoom level ---
         const clampedNewZoomLevel = Math.max(
             this.minZoomLevel,
             Math.min(this.maxZoomLevel, newZoomLevel)
         );
+
+        // --- Exit if zoom level didn't actually change ---
         if (originalZoomLevel === clampedNewZoomLevel) {
             return;
         }
-        console.log("new zoom", clampedNewZoomLevel);
+
+        console.log(
+            `Zooming: Old=${originalZoomLevel.toFixed(2)}, Target=${newZoomLevel.toFixed(
+                2
+            )}, Clamped=${clampedNewZoomLevel.toFixed(2)} (Min: ${this.minZoomLevel.toFixed(
+                2
+            )}, Max: ${this.maxZoomLevel.toFixed(2)})`
+        );
+
+        // --- Calculate positions based on playerTime ---
+        const playerTimeInPercentage = this.playerTime / SECONDS_IN_DAY;
+
+        // Position of the playerTime marker relative to the start of the timeline element (before zoom)
+        const absolutePosBefore = originalTimelineWidth * playerTimeInPercentage;
+
+        // Visual position of the playerTime marker relative to the left edge of the *container* (before zoom)
+        const visualPosInContainer = absolutePosBefore - this.leftOffset;
+
+        // --- Update state with new zoom level ---
         this.zoomLevel = clampedNewZoomLevel;
-
         this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-        const newTotalLeftOffset = this.timelineWidth * playerTimeInPercentage;
-        this.leftOffset = Math.max(newTotalLeftOffset - offsetFromLeftScreen, 0.0);
 
-        // Calculate the new scroll position to keep the current time at the zoom center
-        // this.scrollPosition = currentTimePosition - containerRect.width * zoomCenter;
+        // --- Calculate new absolute position and required offset ---
+        // Position of the playerTime marker relative to the start of the timeline element (after zoom)
+        const absolutePosAfter = this.timelineWidth * playerTimeInPercentage;
+
+        // Calculate the new leftOffset needed to keep the visual position constant
+        let newLeftOffset = absolutePosAfter - visualPosInContainer;
+
+        // --- Clamp the new offset ---
+        // Ensure the offset doesn't go below 0
+        newLeftOffset = Math.max(0, newLeftOffset);
+        // Ensure the offset doesn't go beyond the maximum possible scroll
+        const maxOffset = Math.max(0, this.timelineWidth - containerWidth);
+        newLeftOffset = Math.min(maxOffset, newLeftOffset);
+
+        // console.log(
+        //     `Player Time %: ${playerTimeInPercentage.toFixed(
+        //         4
+        //     )}, Visual Pos: ${visualPosInContainer.toFixed(
+        //         2
+        //     )}, Old Width: ${originalTimelineWidth.toFixed(
+        //         2
+        //     )}, New Width: ${this.timelineWidth.toFixed(
+        //         2
+        //     )}, Old Offset: ${this.leftOffset.toFixed(
+        //         2
+        //     )}, New Offset: ${newLeftOffset.toFixed(2)}, Max Offset: ${maxOffset.toFixed(2)}`
+        // );
+
+        this.leftOffset = newLeftOffset;
+
+        // No need to call requestUpdate() explicitly if properties are decorated with @state or @property
     }
 
     private handleWheel(event: WheelEvent) {
@@ -121,6 +196,7 @@ export class TimelineComponent extends LitElement {
             return;
         }
 
+        console.log("event.deltaY", event.deltaY);
         const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
         this.handleZoom(zoomFactor * this.zoomLevel);
     }
@@ -365,7 +441,6 @@ export class TimelineComponent extends LitElement {
                         width: ${this.timelineWidth}px;
                         height: 100px;
                         transform: translateX(${-this.leftOffset}px);
-                        transition: transform 0.1s ease-out;
                         background-color: #f0f0f0;
                     "
                 >
