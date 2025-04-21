@@ -5,6 +5,7 @@ import { Task, TaskStatus } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
 import { CamData } from "./cam-data";
 import { TIMESTAMP_SIG } from "./signals";
+import { IdentifyServerBaseUrl, SERVER_BASE_URL } from "./constants";
 
 export * from "./player-component";
 export * from "./timeline-component";
@@ -37,7 +38,12 @@ export class DvrUI extends LitElement {
 
     private _initialFetch = new Task(this, {
         task: async ([], { signal }) => {
-            const response = await fetch(`http://localhost:8070/cams`, { signal });
+            const serverUrl = await IdentifyServerBaseUrl();
+            if (serverUrl.err) {
+                throw serverUrl.err;
+            }
+
+            const response = await fetch(`${serverUrl.val}/cams`, { signal });
             if (!response.ok) {
                 throw new Error(`[${response.status}]: ${response.statusText}`);
             }
@@ -266,33 +272,20 @@ export class DvrUI extends LitElement {
     render() {
         return html`
             <div class="container">
-                <h1>DVR UI</h1>
-
-                <div class="controls">
-                    ${this._initialFetch.render({
-                        initial: () => html`<p>Waiting to start task</p>`,
-                        pending: () => html`<p>Running task...</p>`,
-                        complete: (value) => this.renderCameraData(value.message),
-                        error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
-                    })}
-                </div>
-
                 ${this._initialFetch.render({
                     initial: () => html`<p>Waiting to start task</p>`,
                     pending: () => html`<p>Running task...</p>`,
-                    complete: (value) =>
-                        html`<player-component
+                    complete: (value) => html`
+                        <h1>DVR UI</h1>
+                        <div class="controls">${this.renderCameraData(value.message)}</div>
+                        <player-component
                             .selectedDate="${this.selectedDate}"
                             .selectedCameraId="${this.selectedCameraId}"
                             .data="${value.message}"
-                        ></player-component>`,
+                        ></player-component>
+                        ${this.renderTimeline(value.message)}
+                    `,
                     error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
-                })}
-                ${this._initialFetch.render({
-                    initial: () => html`<timeline-component></timeline-component>`,
-                    pending: () => html`<timeline-component></timeline-component>`,
-                    complete: (value) => this.renderTimeline(value.message),
-                    error: () => html`<timeline-component></timeline-component>`
                 })}
             </div>
         `;

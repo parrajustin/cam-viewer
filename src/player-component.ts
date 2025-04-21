@@ -4,6 +4,7 @@ import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { SignalWatcher } from "@lit-labs/signals";
 import { CamData } from "./cam-data";
 import { TIMESTAMP_SIG } from "./signals";
+import { SERVER_BASE_URL } from "./constants";
 
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
@@ -90,6 +91,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                     videoStartSeconds <= playerSeconds &&
                     playerSeconds < videoEndSeconds
                 ) {
+                    console.log('setting path to ', video.path, video.timeOfVideoStart)
                     return html`
                         <video
                             width="auto"
@@ -98,7 +100,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                             crossorigin="anonymous"
                             style="max-height: 100%; max-width: 100%;"
                         >
-                            <source src="http://localhost:8070${video.path}" type="video/mp4" />
+                            <source src="${SERVER_BASE_URL}${video.path}" type="video/mp4" />
                             Your browser does not support the video tag.
                         </video>
                     `;
