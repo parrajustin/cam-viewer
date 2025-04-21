@@ -2,6 +2,8 @@ import { LitElement, html, css, TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ref, createRef } from "lit/directives/ref.js";
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
+import { SignalWatcher } from "@lit-labs/signals";
+import { TIMESTAMP_SIG } from "./signals";
 
 interface Marker {
     time: string; // ISO 8601
@@ -23,12 +25,9 @@ function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
 }
 
 @customElement("timeline-component")
-export class TimelineComponent extends LitElement {
+export class TimelineComponent extends SignalWatcher(LitElement) {
     @property({ type: String })
     public currentTime: string = DateTime.now().toISO();
-
-    @property({ type: Number })
-    public playerTime: number = 0; // in seconds
 
     @property({ type: Array })
     public markers: Marker[] = [];
@@ -80,9 +79,11 @@ export class TimelineComponent extends LitElement {
         const actualOffset = event.clientX + this.leftOffset;
         const percentage = Math.min(1.0, Math.max(0.0, actualOffset / timelineWidth));
         const totalSecondsInDay = 24 * 60 * 60;
-        this.playerTime = totalSecondsInDay * percentage;
-        if (Number.isNaN(this.playerTime)) {
-            this.playerTime = 0.0;
+        const tempPlayerTime = totalSecondsInDay * percentage;
+        if (Number.isNaN(tempPlayerTime)) {
+            TIMESTAMP_SIG.set(0.0);
+        } else {
+            TIMESTAMP_SIG.set(tempPlayerTime);
         }
         // console.log(this.dragStartX, this.leftOffset);
     }
@@ -135,16 +136,8 @@ export class TimelineComponent extends LitElement {
             return;
         }
 
-        console.log(
-            `Zooming: Old=${originalZoomLevel.toFixed(2)}, Target=${newZoomLevel.toFixed(
-                2
-            )}, Clamped=${clampedNewZoomLevel.toFixed(2)} (Min: ${this.minZoomLevel.toFixed(
-                2
-            )}, Max: ${this.maxZoomLevel.toFixed(2)})`
-        );
-
         // --- Calculate positions based on playerTime ---
-        const playerTimeInPercentage = this.playerTime / SECONDS_IN_DAY;
+        const playerTimeInPercentage = TIMESTAMP_SIG.get() / SECONDS_IN_DAY;
 
         // Position of the playerTime marker relative to the start of the timeline element (before zoom)
         const absolutePosBefore = originalTimelineWidth * playerTimeInPercentage;
@@ -196,7 +189,6 @@ export class TimelineComponent extends LitElement {
             return;
         }
 
-        console.log("event.deltaY", event.deltaY);
         const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
         this.handleZoom(zoomFactor * this.zoomLevel);
     }
@@ -282,7 +274,7 @@ export class TimelineComponent extends LitElement {
 
     private createPlayerTimeIndicator() {
         const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-        const playerTimeInPercentage = this.playerTime / (24 * 60 * 60);
+        const playerTimeInPercentage = TIMESTAMP_SIG.get() / (24 * 60 * 60);
         const leftOffset = originalTimelineWidth * playerTimeInPercentage;
         return html` <div
             class="current-time-indicator"
@@ -299,7 +291,7 @@ export class TimelineComponent extends LitElement {
             <span
                 class="current-time-text"
                 style="position: absolute; top: 0; left: 5px; color: black; font-size: 0.8em; white-space: nowrap;"
-                >${this.playerTime}</span
+                >${TIMESTAMP_SIG.get()}</span
             >
         </div>`;
     }
@@ -380,13 +372,11 @@ export class TimelineComponent extends LitElement {
     private createAvailableTimeRange() {
         const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
         const timelineDay = DateTime.fromFormat(this.selectedDate, "yyyy-MM-dd");
-        console.log("timelineDay", this.selectedDate);
 
         const ranges: TemplateResult[] = [];
         for (const range of this.availableTimeRanges) {
             const numMinutes =
                 range.end.diff(range.start, "minute").minutes;
-            console.log("range", range, numMinutes);
             const pixelPerMinute = this.baseZoomLevel * this.zoomLevel / 60;
             const widthOfRange =
                 Math.max(1.0, pixelPerMinute * numMinutes);
@@ -405,7 +395,6 @@ export class TimelineComponent extends LitElement {
 
     // --- Render ---
     render() {
-        console.log("this.availableTimeRanges", this.availableTimeRanges, );
         // const hourWidth = this.baseZoomLevel * this.zoomLevel;
         // const showSeconds = this.zoomLevel > 4; // Adjust as needed
         return html`

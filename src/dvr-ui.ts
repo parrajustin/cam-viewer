@@ -3,31 +3,11 @@ import { customElement, property, state } from "lit/decorators.js";
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { Task, TaskStatus } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
+import { CamData } from "./cam-data";
+import { TIMESTAMP_SIG } from "./signals";
 
-type IsoTime = string;
-
-interface VideoEntryData {
-    timeOfVideoStart: IsoTime;
-    path: string;
-}
-
-interface HourVideoImageData {
-    hourOfDayStart: IsoTime;
-    videos: VideoEntryData[];
-}
-
-interface DayVideoImageData {
-    dayStart: IsoTime;
-    videos: HourVideoImageData[];
-}
-
-type DateStringIsoDate = string;
-interface CamEntry {
-    name: string;
-    dates: Record<DateStringIsoDate, DayVideoImageData>;
-}
-
-type CamData = { [camName: string]: CamEntry };
+export * from "./player-component";
+export * from "./timeline-component";
 
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
@@ -123,6 +103,7 @@ export class DvrUI extends LitElement {
     // Handle date change
     private handleDateChange(event: InputEvent) {
         this.selectedDate = (event.target as HTMLInputElement | null)?.value ?? this.selectedDate;
+        TIMESTAMP_SIG.set(0);
         // console.log("date change", event.target);
     }
 
@@ -131,43 +112,6 @@ export class DvrUI extends LitElement {
         this.selectedCameraId =
             (event.target as HTMLInputElement | null)?.value ?? this.selectedCameraId;
         // console.log("handleCameraChange", event);
-    }
-
-    private renderVideoPlayer(data: CamData) {
-        const camera = data[this.selectedCameraId];
-        if (camera === undefined) {
-            return html`NO SELECTED CAMERA`;
-        }
-
-        const timeData = camera.dates[this.selectedDate];
-        if (timeData === undefined) {
-            return html`No data for selected date`;
-        }
-
-        const sourceArray: string[] = [];
-        for (const hourVideoData of timeData.videos) {
-            for (const video of hourVideoData.videos) {
-                sourceArray.push(video.path);
-            }
-        }
-
-        console.log(sourceArray);
-
-        return html`
-            <video
-                width="auto"
-                height="100%"
-                controls
-                crossorigin="anonymous"
-                style="max-height: 100%"
-            >
-                ${sourceArray.map(
-                    (source) =>
-                        html`<source src="http://localhost:8070${source}" type="video/mp4" />`
-                )}
-                Your browser does not support the video tag.
-            </video>
-        `;
     }
 
     private renderCameraData(data: CamData) {
@@ -244,6 +188,11 @@ export class DvrUI extends LitElement {
             return html`NO SELECTED CAMERA`;
         }
 
+        const parsedSelectedDate = parseFromIso(this.selectedDate);
+        if (!parsedSelectedDate.isValid) {
+            return html`Invalid selected date.`;
+        }
+
         const timeData = camera.dates[this.selectedDate];
         if (timeData === undefined) {
             return html`No data for selected date`;
@@ -252,7 +201,7 @@ export class DvrUI extends LitElement {
         const videoTimes: DateTime<true>[] = [];
         for (const time of timeData.videos) {
             for (const day of time.videos) {
-                console.log("video", day.timeOfVideoStart)
+                console.log("video", day.timeOfVideoStart);
                 const parsedDate = parseFromIso(day.timeOfVideoStart);
                 if (parsedDate.isValid) {
                     videoTimes.push(parsedDate);
@@ -260,34 +209,57 @@ export class DvrUI extends LitElement {
             }
         }
 
-        console.log("videoTimes", videoTimes);
         videoTimes.sort((a, b) => a.toSeconds() - b.toSeconds());
 
         const timeRanges: TimeRanges[] = [];
         let currentTimeRange: TimeRanges | undefined;
         const createNewTimeRange = (date: DateTime<true>) => {
-            console.log("created new time");
             currentTimeRange = {
                 start: date,
                 end: date.plus({ minute: 1 })
             };
         };
+        // Checks if the current TIMESTAMP_SIG is within the range of this video.
+        const checkTimestampInRange = (range: TimeRanges) => {
+            const rangeStartSeconds = range.start.toSeconds() - parsedSelectedDate.toSeconds();
+            const rangeEndSeconds = range.end.toSeconds() - parsedSelectedDate.toSeconds();
+            return (
+                rangeStartSeconds <= TIMESTAMP_SIG.get() && TIMESTAMP_SIG.get() <= rangeEndSeconds
+            );
+        };
+        // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
+        let timestampIsValid = false;
         for (const time of videoTimes) {
             if (currentTimeRange === undefined) {
                 createNewTimeRange(time);
             } else if (currentTimeRange.end.equals(time)) {
                 currentTimeRange.end = time.plus({ minute: 1 });
             } else {
-                console.log("pushing", currentTimeRange);
                 timeRanges.push(currentTimeRange);
+                timestampIsValid = !timestampIsValid
+                    ? checkTimestampInRange(currentTimeRange)
+                    : timestampIsValid;
                 createNewTimeRange(time);
             }
         }
         if (currentTimeRange !== undefined) {
             timeRanges.push(currentTimeRange);
+            timestampIsValid = !timestampIsValid
+                ? checkTimestampInRange(currentTimeRange)
+                : timestampIsValid;
         }
-        console.log("end timeRanges", timeRanges);
-        return html`<timeline-component .selectedDate="${this.selectedDate}" .availableTimeRanges="${timeRanges}"></timeline-component>`
+
+        // If timestampIsValid is not valid use the first range's start.
+        const ts =
+            timeRanges.length > 0
+                ? timeRanges[0].start.toSeconds() - parsedSelectedDate.toSeconds()
+                : 0;
+        TIMESTAMP_SIG.set(ts);
+
+        return html`<timeline-component
+            .selectedDate="${this.selectedDate}"
+            .availableTimeRanges="${timeRanges}"
+        ></timeline-component>`;
     }
 
     // Render
@@ -305,15 +277,17 @@ export class DvrUI extends LitElement {
                     })}
                 </div>
 
-                <div class="player">
-                    ${this._initialFetch.render({
-                        initial: () => html`<p>Waiting to start task</p>`,
-                        pending: () => html`<p>Running task...</p>`,
-                        complete: (value) => this.renderVideoPlayer(value.message),
-                        error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
-                    })}
-                </div>
-
+                ${this._initialFetch.render({
+                    initial: () => html`<p>Waiting to start task</p>`,
+                    pending: () => html`<p>Running task...</p>`,
+                    complete: (value) =>
+                        html`<player-component
+                            .selectedDate="${this.selectedDate}"
+                            .selectedCameraId="${this.selectedCameraId}"
+                            .data="${value.message}"
+                        ></player-component>`,
+                    error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
+                })}
                 ${this._initialFetch.render({
                     initial: () => html`<timeline-component></timeline-component>`,
                     pending: () => html`<timeline-component></timeline-component>`,
