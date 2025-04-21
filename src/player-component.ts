@@ -60,15 +60,18 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
     public disconnectedCallback(): void {
         this.signalWatcher.unwatch();
         if (this.requestUpdateRef.some) {
-            window.cancelAnimationFrame(this.requestUpdateRef.safeValue());
+            window.clearInterval(this.requestUpdateRef.safeValue());
             this.requestUpdateRef = None;
         }
     }
 
     public requestAnimationFrame() {
+        if (this.requestUpdateRef.some) {
+            return;
+        }
+
         this.requestUpdateRef = Some(
-            window.requestAnimationFrame(() => {
-                this.requestUpdateRef = None;
+            window.setInterval(() => {
                 if (this.playerRef.value === undefined) {
                     return;
                 }
@@ -80,9 +83,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                 if (currentTime !== TIMESTAMP_SIG.get().value) {
                     TIMESTAMP_SIG.set({value: currentTime, source: TimestampSignalSource.PLAYER_COMPONENT});
                 }
-
-                this.requestAnimationFrame();
-            })
+            }, 150)
         );
     }
 
