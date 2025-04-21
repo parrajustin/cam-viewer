@@ -1,10 +1,12 @@
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, PropertyValues } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
-import { SignalWatcher } from "@lit-labs/signals";
+import { Signal, SignalWatcher } from "@lit-labs/signals";
 import { CamData } from "./cam-data";
-import { TIMESTAMP_SIG } from "./signals";
+import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 import { SERVER_BASE_URL } from "./constants";
+import { createRef, ref } from "lit/directives/ref.js";
+import { None, Optional, Some } from "./common/optional";
 
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
@@ -23,6 +25,28 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
     @property({ type: Object })
     data: CamData = {};
 
+    // The html5 video tag ref.
+    private playerRef = createRef<HTMLVideoElement>();
+
+    private oldVideoRef = "";
+    private currentVideoRef = "";
+    // Video start in seconds.
+    private videoStart = 0;
+
+    private signalWatcher = new Signal.subtle.Watcher(async () => {
+        // Notify callbacks are not allowed to access signals synchronously
+        await 0;
+
+        if (this.playerRef.value !== undefined && TIMESTAMP_SIG.get().source !== TimestampSignalSource.PLAYER_COMPONENT) {
+            this.playerRef.value.pause();
+            this.playerRef.value.currentTime = TIMESTAMP_SIG.get().value - this.videoStart;
+        }
+        // Watchers have to be re-enabled after they run:
+        this.signalWatcher.watch();
+    });
+
+    private requestUpdateRef: Optional<number> = None;
+
     // Styling
     static styles = css`
         :host {
@@ -32,6 +56,50 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             overflow: hidden;
         }
     `;
+
+    public disconnectedCallback(): void {
+        this.signalWatcher.unwatch();
+        if (this.requestUpdateRef.some) {
+            window.cancelAnimationFrame(this.requestUpdateRef.safeValue());
+            this.requestUpdateRef = None;
+        }
+    }
+
+    public requestAnimationFrame() {
+        this.requestUpdateRef = Some(
+            window.requestAnimationFrame(() => {
+                this.requestUpdateRef = None;
+                if (this.playerRef.value === undefined) {
+                    return;
+                }
+        
+                const playerTime = this.playerRef.value.currentTime;
+                const currentTime = this.videoStart + playerTime;
+
+
+                if (currentTime !== TIMESTAMP_SIG.get().value) {
+                    TIMESTAMP_SIG.set({value: currentTime, source: TimestampSignalSource.PLAYER_COMPONENT});
+                }
+
+                this.requestAnimationFrame();
+            })
+        );
+    }
+
+    public updated(changedProperties: PropertyValues): void {
+        console.log("PlayerComponent updated", changedProperties);
+        this.signalWatcher.watch(TIMESTAMP_SIG);
+
+        if (this.requestUpdateRef.none) {
+            this.requestAnimationFrame();
+        }
+
+        if (this.oldVideoRef !== this.currentVideoRef && this.playerRef.value !== undefined) {
+            this.oldVideoRef = this.currentVideoRef;
+            this.playerRef.value.load();
+            this.playerRef.value.currentTime = TIMESTAMP_SIG.get().value - this.videoStart;
+        }
+    }
 
     public render() {
         const camera = this.data[this.selectedCameraId];
@@ -50,7 +118,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             return html`Failed to parse date format ${this.selectedDate}`;
         }
         // The current player time in date object.
-        const playerDateOjb = dateObj.plus({ seconds: TIMESTAMP_SIG.get() });
+        const playerDateOjb = dateObj.plus({ seconds: TIMESTAMP_SIG.get().value });
         // The current player time in seconds from unix epoch.
         const playerSeconds = playerDateOjb.toSeconds();
 
@@ -67,10 +135,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             const hourEndSeconds = hourEnd.toSeconds();
 
             // Check if the player seconds is within this cam data hour range.
-            if (
-                playerSeconds < hourStartSeconds ||
-                hourEndSeconds <= playerSeconds
-            ) {
+            if (playerSeconds < hourStartSeconds || hourEndSeconds <= playerSeconds) {
                 continue;
             }
 
@@ -87,13 +152,13 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                 const videoStartSeconds = videoStart.toSeconds();
                 const videoEndSeconds = videoEnd.toSeconds();
 
-                if (
-                    videoStartSeconds <= playerSeconds &&
-                    playerSeconds < videoEndSeconds
-                ) {
-                    console.log('setting path to ', video.path, video.timeOfVideoStart)
+                if (videoStartSeconds <= playerSeconds && playerSeconds < videoEndSeconds) {
+                    this.currentVideoRef = video.path;
+                    this.videoStart = Math.abs(dateObj.diff(videoStart, "seconds").seconds);
+                    console.log("setting path to ", video.path, video.timeOfVideoStart);
                     return html`
                         <video
+                            ${ref(this.playerRef)}
                             width="auto"
                             height="100%"
                             controls

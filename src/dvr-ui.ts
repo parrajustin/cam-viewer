@@ -4,7 +4,7 @@ import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { Task, TaskStatus } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
 import { CamData } from "./cam-data";
-import { TIMESTAMP_SIG } from "./signals";
+import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 import { IdentifyServerBaseUrl, SERVER_BASE_URL } from "./constants";
 
 export * from "./player-component";
@@ -109,7 +109,7 @@ export class DvrUI extends LitElement {
     // Handle date change
     private handleDateChange(event: InputEvent) {
         this.selectedDate = (event.target as HTMLInputElement | null)?.value ?? this.selectedDate;
-        TIMESTAMP_SIG.set(0);
+        TIMESTAMP_SIG.set({ value: 0, source: TimestampSignalSource.USER });
         // console.log("date change", event.target);
     }
 
@@ -230,7 +230,7 @@ export class DvrUI extends LitElement {
             const rangeStartSeconds = range.start.toSeconds() - parsedSelectedDate.toSeconds();
             const rangeEndSeconds = range.end.toSeconds() - parsedSelectedDate.toSeconds();
             return (
-                rangeStartSeconds <= TIMESTAMP_SIG.get() && TIMESTAMP_SIG.get() <= rangeEndSeconds
+                rangeStartSeconds <= TIMESTAMP_SIG.get().value && TIMESTAMP_SIG.get().value <= rangeEndSeconds
             );
         };
         // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
@@ -260,7 +260,7 @@ export class DvrUI extends LitElement {
             timeRanges.length > 0
                 ? timeRanges[0].start.toSeconds() - parsedSelectedDate.toSeconds()
                 : 0;
-        TIMESTAMP_SIG.set(ts);
+        TIMESTAMP_SIG.set({ value: ts, source: TimestampSignalSource.DVR_UI_TIMELINE_COMPONENT });
 
         return html`<timeline-component
             .selectedDate="${this.selectedDate}"

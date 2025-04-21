@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { ref, createRef } from "lit/directives/ref.js";
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { SignalWatcher } from "@lit-labs/signals";
-import { TIMESTAMP_SIG } from "./signals";
+import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 
 interface Marker {
     time: string; // ISO 8601
@@ -81,9 +81,9 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
         const totalSecondsInDay = 24 * 60 * 60;
         const tempPlayerTime = totalSecondsInDay * percentage;
         if (Number.isNaN(tempPlayerTime)) {
-            TIMESTAMP_SIG.set(0.0);
+            TIMESTAMP_SIG.set({ value: 0.0, source: TimestampSignalSource.USER });
         } else {
-            TIMESTAMP_SIG.set(tempPlayerTime);
+            TIMESTAMP_SIG.set({ value: tempPlayerTime, source: TimestampSignalSource.USER });
         }
         // console.log(this.dragStartX, this.leftOffset);
     }
@@ -95,7 +95,6 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     //     // pixels from the left of the screen the current time marker is at.
     //     const offsetFromLeftScreen =
     //         originalTimelineWidth * playerTimeInPercentage - this.offsetLeft;
-        
 
     //     const originalZoomLevel = this.zoomLevel;
     //     const clampedNewZoomLevel = Math.max(
@@ -137,7 +136,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
         }
 
         // --- Calculate positions based on playerTime ---
-        const playerTimeInPercentage = TIMESTAMP_SIG.get() / SECONDS_IN_DAY;
+        const playerTimeInPercentage = TIMESTAMP_SIG.get().value / SECONDS_IN_DAY;
 
         // Position of the playerTime marker relative to the start of the timeline element (before zoom)
         const absolutePosBefore = originalTimelineWidth * playerTimeInPercentage;
@@ -274,7 +273,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
 
     private createPlayerTimeIndicator() {
         const originalTimelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-        const playerTimeInPercentage = TIMESTAMP_SIG.get() / (24 * 60 * 60);
+        const playerTimeInPercentage = TIMESTAMP_SIG.get().value / (24 * 60 * 60);
         const leftOffset = originalTimelineWidth * playerTimeInPercentage;
         return html` <div
             class="current-time-indicator"
@@ -291,7 +290,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
             <span
                 class="current-time-text"
                 style="position: absolute; top: 0; left: 5px; color: black; font-size: 0.8em; white-space: nowrap;"
-                >${TIMESTAMP_SIG.get()}</span
+                >${TIMESTAMP_SIG.get().value}</span
             >
         </div>`;
     }
@@ -375,11 +374,9 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
 
         const ranges: TemplateResult[] = [];
         for (const range of this.availableTimeRanges) {
-            const numMinutes =
-                range.end.diff(range.start, "minute").minutes;
-            const pixelPerMinute = this.baseZoomLevel * this.zoomLevel / 60;
-            const widthOfRange =
-                Math.max(1.0, pixelPerMinute * numMinutes);
+            const numMinutes = range.end.diff(range.start, "minute").minutes;
+            const pixelPerMinute = (this.baseZoomLevel * this.zoomLevel) / 60;
+            const widthOfRange = Math.max(1.0, pixelPerMinute * numMinutes);
             const leftTimeInPercentage =
                 range.start.diff(timelineDay, "seconds").seconds / SECONDS_IN_DAY;
             const leftOffset =
