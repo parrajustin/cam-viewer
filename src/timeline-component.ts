@@ -216,16 +216,7 @@ export class TimelineComponent extends LitElement {
                 const containerRect = this.timelineContainerRef.value?.getBoundingClientRect();
                 if (containerRect) {
                     const zoomFactor = 1.1;
-                    const previousZoomLevel = this.zoomLevel;
-                    this.zoomLevel = Math.max(0.1, Math.min(10, this.zoomLevel * zoomFactor));
-                    this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-
-                    const zoomCenter = 0.5;
-                    const currentTimePosition = this.getTimelinePosition(
-                        this.selectedDate + "T" + this.currentTime
-                    );
-                    this.leftOffset = currentTimePosition - containerRect.width * zoomCenter;
-                    // this.updateScrollPositionToTime();
+                    this.handleZoom(zoomFactor * this.zoomLevel);
                 }
                 break;
             }
@@ -234,21 +225,11 @@ export class TimelineComponent extends LitElement {
                 const containerRect = this.timelineContainerRef.value?.getBoundingClientRect();
                 if (containerRect) {
                     const zoomFactor = 0.9;
-                    const previousZoomLevel = this.zoomLevel;
-                    this.zoomLevel = Math.max(0.1, Math.min(10, this.zoomLevel * zoomFactor));
-                    this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-                    const zoomCenter = 0.5;
-                    const currentTimePosition = this.getTimelinePosition(
-                        this.selectedDate + "T" + this.currentTime
-                    );
-                    this.leftOffset = currentTimePosition - containerRect.width * zoomCenter;
-                    // this.updateScrollPositionToTime();
+                    this.handleZoom(zoomFactor * this.zoomLevel);
                 }
                 break;
             }
         }
-        this.timelineWidth = 24 * this.baseZoomLevel * this.zoomLevel;
-        this.requestUpdate();
     }
 
     private addKeyboardListeners() {
@@ -403,10 +384,12 @@ export class TimelineComponent extends LitElement {
 
         const ranges: TemplateResult[] = [];
         for (const range of this.availableTimeRanges) {
-            const timeInPercentage =
-                range.start.diff(range.end, "seconds").seconds / SECONDS_IN_DAY;
+            const numMinutes =
+                range.end.diff(range.start, "minute").minutes;
+            console.log("range", range, numMinutes);
+            const pixelPerMinute = this.baseZoomLevel * this.zoomLevel / 60;
             const widthOfRange =
-                Math.max(1.0, originalTimelineWidth * Math.min(1.0, Math.max(0.0, timeInPercentage)));
+                Math.max(1.0, pixelPerMinute * numMinutes);
             const leftTimeInPercentage =
                 range.start.diff(timelineDay, "seconds").seconds / SECONDS_IN_DAY;
             const leftOffset =
@@ -431,7 +414,7 @@ export class TimelineComponent extends LitElement {
                 ${ref(this.timelineContainerRef)}
                 @mousedown=${this.handleMouseDown}
                 @wheel=${this.handleWheel}
-                style="overflow: hidden; cursor: grab;"
+                style="overflow: hidden; cursor: pointer; select: none;"
             >
                 <div
                     class="timeline"
