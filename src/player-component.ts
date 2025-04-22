@@ -126,6 +126,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                     crossorigin="anonymous"
                     style="max-height: 100%; max-width: 100%;"
                     @canplay=${this.handleCanPlay}
+                    controls
                 >
                     <source src="${SERVER_BASE_URL}${this.currentVideoRef}" type="video/mp4" />
                     Your browser does not support the video tag.
