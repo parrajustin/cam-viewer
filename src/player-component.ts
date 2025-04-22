@@ -173,7 +173,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
         // Watchers have to be re-enabled after they run:
         this.signalWatcher.watch(TIMESTAMP_SIG);
 
-        if (!timestampWithinVideo) {
+        if (!timestampWithinVideo || (timestampWithinVideo && this.playerRef.value === undefined)) {
             this.buildVideoPlayer.run([this.selectedCameraId, this.selectedDate, this.getVideosOfDay.value]);
         }
     });
