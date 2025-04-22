@@ -1,9 +1,8 @@
 import { LitElement, html, css, PropertyValues, TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
+import { DateTime, Settings } from "luxon";
 import { Signal, SignalWatcher } from "@lit-labs/signals";
-import { CamData } from "./cam-data";
-import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
+import { PlayerState, PLAYERSTATE_SIG, TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 import { SERVER_BASE_URL } from "./constants";
 import { createRef, ref } from "lit/directives/ref.js";
 import { cache } from "lit/directives/cache.js";
@@ -14,9 +13,6 @@ import { WrapPromise } from "./common/wrap_promise";
 
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
-function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
-    return DateTime.fromISO(dateTimeString);
-}
 
 @customElement("player-component")
 export class PlayerComponent extends SignalWatcher(LitElement) {
@@ -129,13 +125,33 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
                     height="100%"
                     crossorigin="anonymous"
                     style="max-height: 100%; max-width: 100%;"
+                    @canplay=${this.handleCanPlay}
                 >
                     <source src="${SERVER_BASE_URL}${this.currentVideoRef}" type="video/mp4" />
                     Your browser does not support the video tag.
                 </video>
             `;
         },
-        args: () => [this.selectedCameraId, this.selectedDate, this.getVideosOfDay.value]
+        args: () => [this.selectedCameraId, this.selectedDate, this.getVideosOfDay.value],
+    });
+
+    private playSignalWatcher = new Signal.subtle.Watcher(async () => {
+        // Notify callbacks are not allowed to access signals synchronously
+        await 0;
+        
+        if (this.playerRef.value !== undefined) {
+            switch (PLAYERSTATE_SIG.get()) {
+                case PlayerState.PLAYING:
+                    this.playerRef.value?.play();
+                    break;
+                case PlayerState.PAUSED:
+                    this.playerRef.value?.pause();
+                    break;
+            }
+        } else {
+            PLAYERSTATE_SIG.set(PlayerState.PAUSED);
+        }
+        this.playSignalWatcher.watch(PLAYERSTATE_SIG);
     });
 
     private signalWatcher = new Signal.subtle.Watcher(async () => {
@@ -155,7 +171,10 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
 
         // Watchers have to be re-enabled after they run:
         this.signalWatcher.watch(TIMESTAMP_SIG);
-        this.buildVideoPlayer.run([this.selectedCameraId, this.selectedDate, this.getVideosOfDay.value]);
+
+        if (!timestampWithinVideo) {
+            this.buildVideoPlayer.run([this.selectedCameraId, this.selectedDate, this.getVideosOfDay.value]);
+        }
     });
 
     private requestUpdateRef: Optional<number> = None;
@@ -170,6 +189,14 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             flex-direction: column;
         }
     `;
+
+    private handleCanPlay() {
+        switch (PLAYERSTATE_SIG.get()) {
+            case PlayerState.PLAYING:
+                this.playerRef.value?.play();
+                break;
+        }
+    }
 
     public disconnectedCallback(): void {
         this.signalWatcher.unwatch(TIMESTAMP_SIG);
@@ -207,6 +234,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
     public updated(changedProperties: PropertyValues): void {
         console.log("PlayerComponent updated", changedProperties);
         this.signalWatcher.watch(TIMESTAMP_SIG);
+        this.playSignalWatcher.watch(PLAYERSTATE_SIG);
 
         if (this.requestUpdateRef.none) {
             this.requestAnimationFrame();

@@ -1,7 +1,7 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
-import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
+import { DateTime, Settings } from "luxon";
 import { Task } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
 import { CamData } from "./cam-data";
@@ -12,12 +12,10 @@ import { WrapPromise } from "./common/wrap_promise";
 
 export * from "./player-component";
 export * from "./timeline-component";
+export * from "./player-buttons";
 
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
-function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
-    return DateTime.fromISO(dateTimeString);
-}
 
 @customElement("dvr-ui")
 export class DvrUI extends LitElement {
@@ -366,6 +364,7 @@ export class DvrUI extends LitElement {
                                 .selectedDate="${live(this.selectedDate)}"
                                 .selectedCameraId="${live(this.selectedCameraId)}"
                             ></player-component>
+                            <player-buttons></player-buttons>
                             ${this.renderTimeline()}
                         `;
                     },
