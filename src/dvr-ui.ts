@@ -1,5 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import {live} from 'lit/directives/live.js';
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { Task, TaskStatus } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
@@ -22,19 +23,7 @@ export class DvrUI extends LitElement {
     selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
 
     @state()
-    selectedCameraId: string = "all"; // 'all' or a specific camera ID
-
-    @state()
-    currentTime: string = DateTime.now().toFormat("HH:mm");
-
-    @state()
-    isTimelineDragging: boolean = false;
-
-    @state()
-    timelineDragStartTime: number = 0;
-
-    @state()
-    timelineDragCurrentTime: number = 0;
+    selectedCameraId: string = ""; // 'all' or a specific camera ID
 
     private _initialFetch = new Task(this, {
         task: async ([], { signal }) => {
@@ -110,25 +99,21 @@ export class DvrUI extends LitElement {
     private handleDateChange(event: InputEvent) {
         this.selectedDate = (event.target as HTMLInputElement | null)?.value ?? this.selectedDate;
         TIMESTAMP_SIG.set({ value: 0, source: TimestampSignalSource.USER });
-        // console.log("date change", event.target);
     }
 
     // Handle camera change
     private handleCameraChange(event: InputEvent) {
-        this.selectedCameraId =
-            (event.target as HTMLInputElement | null)?.value ?? this.selectedCameraId;
-        // console.log("handleCameraChange", event);
+        this.selectedCameraId = (event.target as HTMLInputElement | null)?.value ?? "";
+        this.requestUpdate();
     }
 
-    private renderCameraData(data: CamData) {
+    private renderCameraControls(data: CamData) {
         const camNames = Object.keys(data);
-        console.log("camNames", camNames, data);
 
         // Get all day starts. We will need both start and ends for the case we are in different time zones.
         const timeStrings = new Set<string>();
         for (const cam of camNames) {
             const timeData = data[cam];
-            console.log("timeData", timeData);
             if (timeData) {
                 for (const video of Object.entries(timeData.dates)) {
                     timeStrings.add(video[0]);
@@ -161,7 +146,8 @@ export class DvrUI extends LitElement {
                     .filter((date) => date.isValid)
             ) ?? DateTime.now().startOf("day");
 
-        if (camNames.length > 0) {
+
+        if (this.selectedCameraId === "" && camNames.length > 0) {
             this.selectedCameraId = camNames[0];
         }
         return html`<label for="date">Date:</label>
@@ -180,7 +166,7 @@ export class DvrUI extends LitElement {
                     (camera) =>
                         html`<option
                             value="${camera}"
-                            selected="${camera === this.selectedCameraId}"
+                            ?selected=${camera === this.selectedCameraId}
                         >
                             ${camera}
                         </option>`
@@ -207,7 +193,6 @@ export class DvrUI extends LitElement {
         const videoTimes: DateTime<true>[] = [];
         for (const time of timeData.videos) {
             for (const day of time.videos) {
-                console.log("video", day.timeOfVideoStart);
                 const parsedDate = parseFromIso(day.timeOfVideoStart);
                 if (parsedDate.isValid) {
                     videoTimes.push(parsedDate);
@@ -230,7 +215,8 @@ export class DvrUI extends LitElement {
             const rangeStartSeconds = range.start.toSeconds() - parsedSelectedDate.toSeconds();
             const rangeEndSeconds = range.end.toSeconds() - parsedSelectedDate.toSeconds();
             return (
-                rangeStartSeconds <= TIMESTAMP_SIG.get().value && TIMESTAMP_SIG.get().value <= rangeEndSeconds
+                rangeStartSeconds <= TIMESTAMP_SIG.get().value &&
+                TIMESTAMP_SIG.get().value <= rangeEndSeconds
             );
         };
         // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
@@ -275,16 +261,18 @@ export class DvrUI extends LitElement {
                 ${this._initialFetch.render({
                     initial: () => html`<p>Waiting to start task</p>`,
                     pending: () => html`<p>Running task...</p>`,
-                    complete: (value) => html`
+                    complete: (value) => {
+                        return html`
                         <h1>DVR UI</h1>
-                        <div class="controls">${this.renderCameraData(value.message)}</div>
+                        <div class="controls">${this.renderCameraControls(value.message)}</div>
                         <player-component
-                            .selectedDate="${this.selectedDate}"
-                            .selectedCameraId="${this.selectedCameraId}"
-                            .data="${value.message}"
+                            .selectedDate="${live(this.selectedDate)}"
+                            .selectedCameraId="${live(this.selectedCameraId)}"
+                            .data=${value.message}
                         ></player-component>
                         ${this.renderTimeline(value.message)}
-                    `,
+                    `;
+                    },
                     error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
                 })}
             </div>

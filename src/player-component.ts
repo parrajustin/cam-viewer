@@ -17,10 +17,10 @@ function parseFromIso(dateTimeString: string): DateTimeMaybeValid {
 @customElement("player-component")
 export class PlayerComponent extends SignalWatcher(LitElement) {
     @property({ type: String })
-    selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
+    public selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
 
     @property({ type: String })
-    selectedCameraId: string = "all"; // 'all' or a specific camera ID
+    public selectedCameraId: string = "all"; // 'all' or a specific camera ID
 
     @property({ type: Object })
     data: CamData = {};
@@ -63,6 +63,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             window.clearInterval(this.requestUpdateRef.safeValue());
             this.requestUpdateRef = None;
         }
+        super.disconnectedCallback();
     }
 
     public requestAnimationFrame() {
@@ -100,6 +101,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             this.playerRef.value.load();
             this.playerRef.value.currentTime = TIMESTAMP_SIG.get().value - this.videoStart;
         }
+        super.updated(changedProperties);
     }
 
     public render() {

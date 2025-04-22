@@ -313,7 +313,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
                         top: 0;
                         height: 15%;
                         width: 1px;
-                        background-color: red;
+                        background-color: #999;
                     "
                     ></div>
                 `;
@@ -343,28 +343,25 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     private createHourMinuteIndicators() {
         const hourWidth = this.baseZoomLevel * this.zoomLevel;
         const showSeconds = this.zoomLevel > 4; // Adjust as needed
+        const availableScreenWidth = document.documentElement.clientWidth;
+
+        const visibleLeftOffsetpx = this.leftOffset;
+        const visibleRightOffsetpx = availableScreenWidth + this.leftOffset;
+
         return [...Array(24)].map(
-            (_, i) =>
-                html`<div
+            (_, i) => {
+                const hourLeftOffset = i * hourWidth;
+                const hourRightOffset = (i+1) * hourWidth;
+                const hourOverlapsVisibleRange = hourLeftOffset < visibleRightOffsetpx && visibleLeftOffsetpx < hourRightOffset;
+                return html`<div
                         class="timeline-hour"
-                        style="
-            position: absolute;
-            left: ${i * hourWidth}px;
-            width: ${hourWidth}px;
-            height: 100%;
-            border-right: 1px solid #ccc;
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-            font-size: 0.7em;
-            color: #666;
-            padding-top: 60px;
-        "
+                        style="left: ${i * hourWidth}px; width: ${hourWidth}px;"
                     >
                         ${i}:00
                     </div>
                     ${this.createMinuteIndicators(i, hourWidth)}
-                    ${showSeconds ? this.createSecondsIndicator(i) : ""} `
+                    ${showSeconds && hourOverlapsVisibleRange ? this.createSecondsIndicator(i) : ""} `;
+            }
         );
     }
 
@@ -383,7 +380,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
                 originalTimelineWidth * Math.min(1.0, Math.max(0.0, leftTimeInPercentage));
             ranges.push(html`
                 <div
-                    style="position: absolute; left: ${leftOffset}px; width: ${widthOfRange}px; height: 20px; background-color: green;"
+                    style="position: absolute; left: ${leftOffset}px; width: ${widthOfRange}px; height: 8%; background-color: green;"
                 ></div>
             `);
         }
@@ -441,7 +438,15 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
         }
 
         .timeline-hour {
-            /* position and other styles are set dynamically */
+            position: absolute;
+            height: 100%;
+            border-right: 1px solid #ccc;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            font-size: 0.7em;
+            color: #666;
+            padding-top: 80px;
         }
 
         .marker {
