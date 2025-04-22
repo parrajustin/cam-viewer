@@ -321,21 +321,18 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     }
 
     private createMinuteIndicators(hourIndex: number, hourWidth: number) {
+        const showText = this.zoomLevel > 4; // Adjust as needed
         return [...Array(6)].map((_, j) => {
             if (j === 0) return null; // Skip 0th minute mark (already covered by hour)
             const minutePosition = hourIndex * hourWidth + (hourWidth / 6) * j;
             return html`
-                <div
-                    class="timeline-minute"
-                    style="
-            position: absolute;
-            left: ${minutePosition}px;
-            top: 0;
-            height: 30%;
-            width: 1px;
-            background-color: #999;
-        "
-                ></div>
+                <div class="timeline-minute" style="left: ${minutePosition}px;">
+                    ${showText
+                        ? html`<span class="timeline-minute-text"
+                              >${new String(hourIndex).padStart(2, "0")}:${j*10}</span
+                          >`
+                        : html``}
+                </div>
             `;
         });
     }
@@ -348,21 +345,20 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
         const visibleLeftOffsetpx = this.leftOffset;
         const visibleRightOffsetpx = availableScreenWidth + this.leftOffset;
 
-        return [...Array(24)].map(
-            (_, i) => {
-                const hourLeftOffset = i * hourWidth;
-                const hourRightOffset = (i+1) * hourWidth;
-                const hourOverlapsVisibleRange = hourLeftOffset < visibleRightOffsetpx && visibleLeftOffsetpx < hourRightOffset;
-                return html`<div
-                        class="timeline-hour"
-                        style="left: ${i * hourWidth}px; width: ${hourWidth}px;"
-                    >
-                        ${i}:00
-                    </div>
-                    ${this.createMinuteIndicators(i, hourWidth)}
-                    ${showSeconds && hourOverlapsVisibleRange ? this.createSecondsIndicator(i) : ""} `;
-            }
-        );
+        return [...Array(24)].map((_, i) => {
+            const hourLeftOffset = i * hourWidth;
+            const hourRightOffset = (i + 1) * hourWidth;
+            const hourOverlapsVisibleRange =
+                hourLeftOffset < visibleRightOffsetpx && visibleLeftOffsetpx < hourRightOffset;
+            return html`<div
+                    class="timeline-hour"
+                    style="left: ${i * hourWidth}px; width: ${hourWidth}px;"
+                >
+                    ${i}:00
+                </div>
+                ${hourOverlapsVisibleRange ? this.createMinuteIndicators(i, hourWidth) : ""}
+                ${showSeconds && hourOverlapsVisibleRange ? this.createSecondsIndicator(i) : ""} `;
+        });
     }
 
     private createAvailableTimeRange() {
@@ -444,8 +440,8 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
             display: flex;
             align-items: flex-start;
             justify-content: center;
-            font-size: 0.7em;
-            color: #666;
+            font-size: 0.9em;
+            color: black;
             padding-top: 80px;
         }
 
@@ -478,6 +474,12 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
             height: 30%;
             width: 1px;
             background-color: #999;
+        }
+        .timeline-minute-text {
+            color: black;
+            position: relative;
+            top: 30px;
+            left: -3px;
         }
         .timeline-second {
             position: absolute;
