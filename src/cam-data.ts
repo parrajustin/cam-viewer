@@ -20,9 +20,9 @@ interface DayVideoImageData {
 type DateStringIsoDate = string;
 interface CamEntry {
     name: string;
-    dates: Record<DateStringIsoDate, DayVideoImageData | undefined>;
+    dates: Record<DateStringIsoDate, DayVideoImageData>;
 }
 
-export type CamData = { [camName: string]: CamEntry | undefined };
+export type CamData = { [camName: string]: CamEntry };
 
 export const CAM_DATA = signal<CamData>({} as CamData);

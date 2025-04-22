@@ -1,12 +1,14 @@
 import { LitElement, html, css } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
-import {live} from 'lit/directives/live.js';
+import { customElement, state } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
-import { Task, TaskStatus } from "@lit/task";
+import { Task } from "@lit/task";
 import { TimeRanges } from "./timeline-component";
 import { CamData } from "./cam-data";
 import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
-import { IdentifyServerBaseUrl, SERVER_BASE_URL } from "./constants";
+import { IdentifyServerBaseUrl } from "./constants";
+import { CAM_DB, PushCamDataToDatabase, Video } from "./cam-videos";
+import { WrapPromise } from "./common/wrap_promise";
 
 export * from "./player-component";
 export * from "./timeline-component";
@@ -36,9 +38,184 @@ export class DvrUI extends LitElement {
             if (!response.ok) {
                 throw new Error(`[${response.status}]: ${response.statusText}`);
             }
-            return response.json() as unknown as { success: boolean; message: CamData };
+            const camData = (await response.json()) as unknown as {
+                success: boolean;
+                message: CamData;
+            };
+
+            if (!camData.success) {
+                throw camData.message;
+            }
+
+            const result = await PushCamDataToDatabase(camData.message);
+            if (result.err) {
+                throw result.val;
+            }
+
+            const camNames: string[] = [];
+            CAM_DB.videoFiles.orderBy("camName").eachUniqueKey((camName) => {
+                camNames.push(camName.valueOf() as string);
+            });
+            if (this.selectedCameraId === "" && camNames.length > 0) {
+                this.selectedCameraId = camNames[0];
+            }
+
+            return CAM_DB.videoFiles;
         },
         args: () => []
+    });
+
+    private buildControlsTask = new Task(this, {
+        task: async ([selectedCameraId, videoDbPromise], {}) => {
+            const videoDb = await videoDbPromise.taskComplete;
+            console.log("starting to build controls");
+
+            const allVideos = await WrapPromise(
+                videoDb.where("camName").equals(selectedCameraId).sortBy("vidStartEpoch"),
+                "Failed to get all videos"
+            );
+            if (allVideos.err) {
+                throw allVideos.val;
+            }
+
+            let isDisabled = false;
+            if (allVideos.safeUnwrap().length === 0) {
+                isDisabled = true;
+            }
+
+            const minDate = DateTime.fromSeconds(
+                allVideos.safeUnwrap().at(0)?.vidStartEpoch ?? 0
+            ).toISODate();
+            const maxDate = DateTime.fromSeconds(
+                allVideos.safeUnwrap().at(allVideos.safeUnwrap().length - 1)?.vidEndEpoch ?? 0
+            ).toISODate();
+            return html`
+                <input
+                    type="date"
+                    id="date"
+                    value="${this.selectedDate}"
+                    @change="${this.handleDateChange}"
+                    min="${minDate}"
+                    max="${maxDate}"
+                    ?disabled=${isDisabled}
+                />
+            `;
+        },
+        args: () => [this.selectedCameraId, this._initialFetch]
+    });
+
+    private buildCamNameTask = new Task(this, {
+        task: async ([videoDbPromise], {}) => {
+            await videoDbPromise.taskComplete;
+
+            const camNames: string[] = [];
+            const getCamNames = await WrapPromise(
+                CAM_DB.videoFiles.orderBy("camName").eachUniqueKey((camName) => {
+                    camNames.push(camName.valueOf() as string);
+                }),
+                "Failed to get each unique key"
+            );
+            if (getCamNames.err) {
+                throw getCamNames.err;
+            }
+
+            if (this.selectedCameraId === "" && camNames.length > 0) {
+                this.selectedCameraId = camNames[0];
+            }
+            let isDisabled = false;
+            if (camNames.length === 0) {
+                isDisabled = true;
+            }
+
+            return html`
+                <select id="camera" @change="${this.handleCameraChange}" ?disabled=${isDisabled}>
+                    ${camNames.map(
+                        (camera) =>
+                            html`<option
+                                value="${camera}"
+                                ?selected=${camera === this.selectedCameraId}
+                            >
+                                ${camera}
+                            </option>`
+                    )}
+                </select>
+            `;
+        },
+        args: () => [this._initialFetch]
+    });
+
+    private buildTimelineTask = new Task(this, {
+        task: async ([selectedCameraId, selectedDate, videoDbPromise], {}) => {
+            console.log("running timeline task");
+            const videoDb = await videoDbPromise.taskComplete;
+            const parsedSelectedDate = DateTime.fromFormat(selectedDate, "yyyy-MM-dd");
+            if (!parsedSelectedDate.isValid) {
+                throw new Error(`Failed to parse date in timeline task ${selectedDate}`);
+            }
+
+            const allVideos = await WrapPromise(
+                videoDb.where("camName").equals(selectedCameraId).sortBy("vidStartEpoch"),
+                "Failed to get each unique key"
+            );
+            if (allVideos.err) {
+                throw allVideos.val;
+            }
+
+            const timeRanges: TimeRanges[] = [];
+            let currentTimeRange: TimeRanges | undefined;
+            const createNewTimeRange = (date: Video): TimeRanges => {
+                return {
+                    start: DateTime.fromSeconds(date.vidStartEpoch),
+                    end: DateTime.fromSeconds(date.vidEndEpoch)
+                };
+            };
+            // Checks if the current TIMESTAMP_SIG is within the range of this video.
+            const checkTimestampInRange = (range: TimeRanges) => {
+                const rangeStartSeconds = range.start.toSeconds() - parsedSelectedDate.toSeconds();
+                const rangeEndSeconds = range.end.toSeconds() - parsedSelectedDate.toSeconds();
+                return (
+                    rangeStartSeconds <= TIMESTAMP_SIG.get().value &&
+                    TIMESTAMP_SIG.get().value <= rangeEndSeconds
+                );
+            };
+            // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
+            let timestampIsValid = false;
+            for (const video of allVideos.val) {
+                const parsedCurrentRange = createNewTimeRange(video);
+                if (currentTimeRange === undefined) {
+                    currentTimeRange = parsedCurrentRange;
+                } else if (currentTimeRange.end.equals(parsedCurrentRange.start)) {
+                    currentTimeRange.end = parsedCurrentRange.end;
+                } else {
+                    timeRanges.push(currentTimeRange);
+                    timestampIsValid = timestampIsValid || checkTimestampInRange(currentTimeRange);
+                    currentTimeRange = parsedCurrentRange;
+                }
+            }
+            if (currentTimeRange !== undefined) {
+                timeRanges.push(currentTimeRange);
+                timestampIsValid = !timestampIsValid
+                    ? checkTimestampInRange(currentTimeRange)
+                    : timestampIsValid;
+            }
+            // If timestampIsValid is not valid use the first range's start.
+            const ts =
+                timeRanges.length > 0
+                    ? timeRanges[0].start.toSeconds() - parsedSelectedDate.toSeconds()
+                    : 0;
+            TIMESTAMP_SIG.set({
+                value: ts,
+                source: TimestampSignalSource.DVR_UI_TIMELINE_COMPONENT
+            });
+
+            return html`
+                <timeline-component
+                    .selectedDate="${selectedDate}"
+                    .availableTimeRanges="${timeRanges}"
+                ></timeline-component>
+            `;
+        },
+        args: () => [this.selectedCameraId, this.selectedDate, this._initialFetch]
     });
 
     // Styling
@@ -107,151 +284,71 @@ export class DvrUI extends LitElement {
         this.requestUpdate();
     }
 
-    private renderCameraControls(data: CamData) {
-        const camNames = Object.keys(data);
+    private renderCameraControls() {
+        return html`
+            <label for="date">Date:</label>
 
-        // Get all day starts. We will need both start and ends for the case we are in different time zones.
-        const timeStrings = new Set<string>();
-        for (const cam of camNames) {
-            const timeData = data[cam];
-            if (timeData) {
-                for (const video of Object.entries(timeData.dates)) {
-                    timeStrings.add(video[0]);
+            ${this.buildControlsTask.render({
+                initial: () =>
+                    html`<input
+                        type="date"
+                        id="date"
+                        @change="${this.handleDateChange}"
+                        disabled
+                    />`,
+                pending: () =>
+                    html`<input
+                        type="date"
+                        id="date"
+                        @change="${this.handleDateChange}"
+                        disabled
+                    />`,
+                complete: (value) => value,
+                error: (error) => {
+                    console.error(error);
+                    return html`<p>Oops, something went wrong: ${error}</p>`;
                 }
-            }
-        }
-
-        // The corrected day times in our time zone.
-        const dayTimes = new Set<string>();
-        for (const timeStr of timeStrings) {
-            const date = parseFromIso(timeStr);
-            if (!date.isValid) {
-                continue;
-            }
-
-            const dayStr = date.startOf("day").toISODate();
-            dayTimes.add(dayStr);
-        }
-
-        const minDate =
-            DateTime.min(
-                ...[...dayTimes.values()]
-                    .map((dateStr) => parseFromIso(dateStr))
-                    .filter((date) => date.isValid)
-            ) ?? DateTime.now().startOf("day");
-        const maxDate =
-            DateTime.max(
-                ...[...dayTimes.values()]
-                    .map((dateStr) => parseFromIso(dateStr))
-                    .filter((date) => date.isValid)
-            ) ?? DateTime.now().startOf("day");
-
-
-        if (this.selectedCameraId === "" && camNames.length > 0) {
-            this.selectedCameraId = camNames[0];
-        }
-        return html`<label for="date">Date:</label>
-            <input
-                type="date"
-                id="date"
-                value="${this.selectedDate}"
-                @change="${this.handleDateChange}"
-                min="${minDate.toISODate()}"
-                max="${maxDate.toISODate()}"
-            />
+            })}
 
             <label for="camera">Camera:</label>
-            <select id="camera" @change="${this.handleCameraChange}">
-                ${camNames.map(
-                    (camera) =>
-                        html`<option
-                            value="${camera}"
-                            ?selected=${camera === this.selectedCameraId}
-                        >
-                            ${camera}
-                        </option>`
-                )}
-            </select>`;
+            ${this.buildCamNameTask.render({
+                initial: () =>
+                    html`<select id="camera" @change="${this.handleCameraChange}" disabled>
+                        <select></select>
+                    </select>`,
+                pending: () =>
+                    html`<select id="camera" @change="${this.handleCameraChange}" disabled>
+                        <select></select>
+                    </select>`,
+                complete: (value) => value,
+                error: (error) => {
+                    console.error(error);
+                    return html`<p>Oops, something went wrong: ${error}</p>`;
+                }
+            })}
+        `;
     }
 
-    private renderTimeline(data: CamData) {
-        const camera = data[this.selectedCameraId];
-        if (camera === undefined) {
-            return html`NO SELECTED CAMERA`;
-        }
-
-        const parsedSelectedDate = parseFromIso(this.selectedDate);
-        if (!parsedSelectedDate.isValid) {
-            return html`Invalid selected date.`;
-        }
-
-        const timeData = camera.dates[this.selectedDate];
-        if (timeData === undefined) {
-            return html`No data for selected date`;
-        }
-
-        const videoTimes: DateTime<true>[] = [];
-        for (const time of timeData.videos) {
-            for (const day of time.videos) {
-                const parsedDate = parseFromIso(day.timeOfVideoStart);
-                if (parsedDate.isValid) {
-                    videoTimes.push(parsedDate);
+    private renderTimeline() {
+        return html`
+            ${this.buildTimelineTask.render({
+                initial: () =>
+                    html`<timeline-component
+                        .selectedDate="${this.selectedDate}"
+                        .availableTimeRanges="${[]}"
+                    ></timeline-component>`,
+                pending: () =>
+                    html`<timeline-component
+                        .selectedDate="${this.selectedDate}"
+                        .availableTimeRanges="${[]}"
+                    ></timeline-component>`,
+                complete: (value) => value,
+                error: (error) => {
+                    console.error(error);
+                    return html`<p>Oops, something went wrong: ${error}</p>`;
                 }
-            }
-        }
-
-        videoTimes.sort((a, b) => a.toSeconds() - b.toSeconds());
-
-        const timeRanges: TimeRanges[] = [];
-        let currentTimeRange: TimeRanges | undefined;
-        const createNewTimeRange = (date: DateTime<true>) => {
-            currentTimeRange = {
-                start: date,
-                end: date.plus({ minute: 1 })
-            };
-        };
-        // Checks if the current TIMESTAMP_SIG is within the range of this video.
-        const checkTimestampInRange = (range: TimeRanges) => {
-            const rangeStartSeconds = range.start.toSeconds() - parsedSelectedDate.toSeconds();
-            const rangeEndSeconds = range.end.toSeconds() - parsedSelectedDate.toSeconds();
-            return (
-                rangeStartSeconds <= TIMESTAMP_SIG.get().value &&
-                TIMESTAMP_SIG.get().value <= rangeEndSeconds
-            );
-        };
-        // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
-        let timestampIsValid = false;
-        for (const time of videoTimes) {
-            if (currentTimeRange === undefined) {
-                createNewTimeRange(time);
-            } else if (currentTimeRange.end.equals(time)) {
-                currentTimeRange.end = time.plus({ minute: 1 });
-            } else {
-                timeRanges.push(currentTimeRange);
-                timestampIsValid = !timestampIsValid
-                    ? checkTimestampInRange(currentTimeRange)
-                    : timestampIsValid;
-                createNewTimeRange(time);
-            }
-        }
-        if (currentTimeRange !== undefined) {
-            timeRanges.push(currentTimeRange);
-            timestampIsValid = !timestampIsValid
-                ? checkTimestampInRange(currentTimeRange)
-                : timestampIsValid;
-        }
-
-        // If timestampIsValid is not valid use the first range's start.
-        const ts =
-            timeRanges.length > 0
-                ? timeRanges[0].start.toSeconds() - parsedSelectedDate.toSeconds()
-                : 0;
-        TIMESTAMP_SIG.set({ value: ts, source: TimestampSignalSource.DVR_UI_TIMELINE_COMPONENT });
-
-        return html`<timeline-component
-            .selectedDate="${this.selectedDate}"
-            .availableTimeRanges="${timeRanges}"
-        ></timeline-component>`;
+            })}
+        `;
     }
 
     // Render
@@ -261,19 +358,21 @@ export class DvrUI extends LitElement {
                 ${this._initialFetch.render({
                     initial: () => html`<p>Waiting to start task</p>`,
                     pending: () => html`<p>Running task...</p>`,
-                    complete: (value) => {
+                    complete: () => {
                         return html`
-                        <h1>DVR UI</h1>
-                        <div class="controls">${this.renderCameraControls(value.message)}</div>
-                        <player-component
-                            .selectedDate="${live(this.selectedDate)}"
-                            .selectedCameraId="${live(this.selectedCameraId)}"
-                            .data=${value.message}
-                        ></player-component>
-                        ${this.renderTimeline(value.message)}
-                    `;
+                            <h1>DVR UI</h1>
+                            <div class="controls">${this.renderCameraControls()}</div>
+                            <player-component
+                                .selectedDate="${live(this.selectedDate)}"
+                                .selectedCameraId="${live(this.selectedCameraId)}"
+                            ></player-component>
+                            ${this.renderTimeline()}
+                        `;
                     },
-                    error: (error) => html`<p>Oops, something went wrong: ${error}</p>`
+                    error: (error) => {
+                        console.error(error);
+                        return html`<p>Oops, something went wrong: ${error}</p>`;
+                    }
                 })}
             </div>
         `;

@@ -29,9 +29,6 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     @property({ type: String })
     public currentTime: string = DateTime.now().toISO();
 
-    @property({ type: Array })
-    public markers: Marker[] = [];
-
     @property({ type: String })
     public selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
 
@@ -41,9 +38,6 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     // --- State ---
     @state()
     private leftOffset = 0; // in pixels
-
-    @state()
-    private isDragging = false;
 
     @state()
     private timelineWidth = 2400; // Default: 24 hours * 100px/hour
@@ -59,6 +53,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
     private readonly maxZoomLevel = document.documentElement.clientWidth / (this.baseZoomLevel / 6);
 
     // --- Properties ---
+
     @state()
     public zoomLevel = this.minZoomLevel; // 1 = 100px/hour, 2 = 200px/hour, etc.
 
