@@ -478,7 +478,7 @@ export class TimelineComponent extends SignalWatcher(LitElement) {
         .timeline-minute-text {
             color: black;
             position: relative;
-            top: 30px;
+            top: 100%;
             left: -3px;
         }
         .timeline-second {

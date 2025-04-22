@@ -54,6 +54,7 @@ export class PlayerComponent extends SignalWatcher(LitElement) {
             width: 100%;
             flex: 1;
             overflow: hidden;
+            flex-direction: column;
         }
     `;
 
