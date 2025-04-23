@@ -5,12 +5,6 @@ import { DateTime, DateTimeMaybeValid, Settings } from "luxon";
 import { SignalWatcher } from "@lit-labs/signals";
 import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 
-interface Marker {
-    time: string; // ISO 8601
-    label?: string;
-    color?: string;
-}
-
 export interface TimeRanges {
     start: DateTime<true>; // in seconds
     end: DateTime<true>; // in seconds

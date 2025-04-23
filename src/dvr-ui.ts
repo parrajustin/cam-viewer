@@ -9,6 +9,7 @@ import { TIMESTAMP_SIG, TimestampSignalSource } from "./signals";
 import { IdentifyServerBaseUrl } from "./constants";
 import { CAM_DB, PushCamDataToDatabase, Video } from "./cam-videos";
 import { WrapPromise } from "./common/wrap_promise";
+import { map } from "lit/directives/map.js";
 
 export * from "./player-component";
 export * from "./timeline-component";
@@ -17,13 +18,26 @@ export * from "./player-buttons";
 // Set the default timezone
 Settings.defaultZone = "America/Denver";
 
+enum ViewLayout {
+    SingleView = 0,
+    DoubleView,
+    QuadView
+}
+
 @customElement("dvr-ui")
 export class DvrUI extends LitElement {
     @state()
     selectedDate: string = DateTime.now().toFormat("yyyy-MM-dd");
 
     @state()
-    selectedCameraId: string = ""; // 'all' or a specific camera ID
+    selectedCamIds: readonly string[] = []; // 'all' or a specific camera ID
+
+    @state()
+    viewLayout: ViewLayout = ViewLayout.SingleView;
+
+    // The camera names a user can select.
+    @state()
+    availableCamNames: string[] = [];
 
     private _initialFetch = new Task(this, {
         task: async ([], { signal }) => {
@@ -51,11 +65,20 @@ export class DvrUI extends LitElement {
             }
 
             const camNames: string[] = [];
-            CAM_DB.videoFiles.orderBy("camName").eachUniqueKey((camName) => {
+            await CAM_DB.videoFiles.orderBy("camName").eachUniqueKey((camName) => {
                 camNames.push(camName.valueOf() as string);
             });
-            if (this.selectedCameraId === "" && camNames.length > 0) {
-                this.selectedCameraId = camNames[0];
+            this.availableCamNames = camNames;
+            switch (this.viewLayout) {
+                case ViewLayout.SingleView:
+                    this.selectedCamIds = [""];
+                    break;
+                case ViewLayout.DoubleView:
+                    this.selectedCamIds = ["", ""];
+                    break;
+                case ViewLayout.QuadView:
+                    this.selectedCamIds = ["", "", "", ""];
+                    break;
             }
 
             return CAM_DB.videoFiles;
@@ -64,12 +87,12 @@ export class DvrUI extends LitElement {
     });
 
     private buildControlsTask = new Task(this, {
-        task: async ([selectedCameraId, videoDbPromise], {}) => {
+        task: async ([selectedCamIds, videoDbPromise], {}) => {
             const videoDb = await videoDbPromise.taskComplete;
             console.log("starting to build controls");
 
             const allVideos = await WrapPromise(
-                videoDb.where("camName").equals(selectedCameraId).sortBy("vidStartEpoch"),
+                videoDb.where("camName").anyOf(selectedCamIds).sortBy("vidStartEpoch"),
                 "Failed to get all videos"
             );
             if (allVideos.err) {
@@ -99,52 +122,12 @@ export class DvrUI extends LitElement {
                 />
             `;
         },
-        args: () => [this.selectedCameraId, this._initialFetch]
-    });
-
-    private buildCamNameTask = new Task(this, {
-        task: async ([videoDbPromise], {}) => {
-            await videoDbPromise.taskComplete;
-
-            const camNames: string[] = [];
-            const getCamNames = await WrapPromise(
-                CAM_DB.videoFiles.orderBy("camName").eachUniqueKey((camName) => {
-                    camNames.push(camName.valueOf() as string);
-                }),
-                "Failed to get each unique key"
-            );
-            if (getCamNames.err) {
-                throw getCamNames.err;
-            }
-
-            if (this.selectedCameraId === "" && camNames.length > 0) {
-                this.selectedCameraId = camNames[0];
-            }
-            let isDisabled = false;
-            if (camNames.length === 0) {
-                isDisabled = true;
-            }
-
-            return html`
-                <select id="camera" @change="${this.handleCameraChange}" ?disabled=${isDisabled}>
-                    ${camNames.map(
-                        (camera) =>
-                            html`<option
-                                value="${camera}"
-                                ?selected=${camera === this.selectedCameraId}
-                            >
-                                ${camera}
-                            </option>`
-                    )}
-                </select>
-            `;
-        },
-        args: () => [this._initialFetch]
+        args: () => [this.selectedCamIds, this._initialFetch]
     });
 
     private buildTimelineTask = new Task(this, {
-        task: async ([selectedCameraId, selectedDate, videoDbPromise], {}) => {
-            console.log("running timeline task");
+        task: async ([selectedCamIds, selectedDate, videoDbPromise], {}) => {
+            console.log("running timeline task", selectedCamIds, selectedDate);
             const videoDb = await videoDbPromise.taskComplete;
             const parsedSelectedDate = DateTime.fromFormat(selectedDate, "yyyy-MM-dd");
             if (!parsedSelectedDate.isValid) {
@@ -152,13 +135,14 @@ export class DvrUI extends LitElement {
             }
 
             const allVideos = await WrapPromise(
-                videoDb.where("camName").equals(selectedCameraId).sortBy("vidStartEpoch"),
+                videoDb.where("camName").anyOf(selectedCamIds).sortBy("vidStartEpoch"),
                 "Failed to get each unique key"
             );
             if (allVideos.err) {
                 throw allVideos.val;
             }
 
+            const rangeSet = new Set<string>();
             const timeRanges: TimeRanges[] = [];
             let currentTimeRange: TimeRanges | undefined;
             const createNewTimeRange = (date: Video): TimeRanges => {
@@ -176,14 +160,29 @@ export class DvrUI extends LitElement {
                     TIMESTAMP_SIG.get().value <= rangeEndSeconds
                 );
             };
+            const rangesIntersect = (range1: TimeRanges, range2: TimeRanges) => {
+                return (
+                    range1.end.toSeconds() >= range2.start.toSeconds() &&
+                    range1.start.toSeconds() <= range2.end.toSeconds()
+                );
+            };
+            const getLatestEnd = (range1: TimeRanges, range2: TimeRanges) => {
+                return range1.end.toSeconds() > range2.end.toSeconds() ? range1.end : range2.end;
+            };
             // If the current TIMESTAMP_SIG is within a valid range, if not reset to first range.
             let timestampIsValid = false;
             for (const video of allVideos.val) {
+                const rangeKey = `${video.vidStartEpoch}-${video.vidEndEpoch}`;
+                if (rangeSet.has(rangeKey)) {
+                    continue;
+                }
+                rangeSet.add(rangeKey);
+
                 const parsedCurrentRange = createNewTimeRange(video);
                 if (currentTimeRange === undefined) {
                     currentTimeRange = parsedCurrentRange;
-                } else if (currentTimeRange.end.equals(parsedCurrentRange.start)) {
-                    currentTimeRange.end = parsedCurrentRange.end;
+                } else if (rangesIntersect(currentTimeRange, parsedCurrentRange)) {
+                    currentTimeRange.end = getLatestEnd(currentTimeRange, parsedCurrentRange);
                 } else {
                     timeRanges.push(currentTimeRange);
                     timestampIsValid = timestampIsValid || checkTimestampInRange(currentTimeRange);
@@ -213,7 +212,7 @@ export class DvrUI extends LitElement {
                 ></timeline-component>
             `;
         },
-        args: () => [this.selectedCameraId, this.selectedDate, this._initialFetch]
+        args: () => [this.selectedCamIds, this.selectedDate, this._initialFetch]
     });
 
     // Styling
@@ -263,10 +262,24 @@ export class DvrUI extends LitElement {
             font-size: 1em;
         }
 
-        .no-recordings-message {
-            text-align: center;
-            color: #666;
-            margin-top: 16px;
+        .double-view {
+            display: flex;
+            flex-direction: row;
+            height: 100%;
+            width: 100%;
+        }
+
+        .quad-view {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+        }
+
+        .quad-row {
+            display: flex;
+            flex-direction: row;
+            height: 100%;
         }
     `;
 
@@ -277,12 +290,36 @@ export class DvrUI extends LitElement {
     }
 
     // Handle camera change
-    private handleCameraChange(event: InputEvent) {
-        this.selectedCameraId = (event.target as HTMLInputElement | null)?.value ?? "";
+    private handleCameraChange(event: InputEvent, index: number) {
+        if (this.selectedCamIds.length <= index || index < 0) {
+            return;
+        }
+        const copyOfCams = [...this.selectedCamIds];
+        copyOfCams[index] = (event.target as HTMLInputElement | null)?.value ?? "";
+        this.selectedCamIds = copyOfCams;
         this.requestUpdate();
     }
 
+    private handleViewChange(event: InputEvent) {
+        const viewValue = (event.target as HTMLInputElement | null)?.value ?? "";
+        this.viewLayout = ViewLayout[viewValue as any] as unknown as ViewLayout;
+        console.log(viewValue, this.viewLayout);
+
+        switch (this.viewLayout) {
+            case ViewLayout.SingleView:
+                this.selectedCamIds = [""];
+                break;
+            case ViewLayout.DoubleView:
+                this.selectedCamIds = ["", ""];
+                break;
+            case ViewLayout.QuadView:
+                this.selectedCamIds = ["", "", "", ""];
+                break;
+        }
+    }
+
     private renderCameraControls() {
+        console.log("this.availableCamNames", JSON.stringify(this.availableCamNames));
         return html`
             <label for="date">Date:</label>
 
@@ -308,22 +345,35 @@ export class DvrUI extends LitElement {
                 }
             })}
 
-            <label for="camera">Camera:</label>
-            ${this.buildCamNameTask.render({
-                initial: () =>
-                    html`<select id="camera" @change="${this.handleCameraChange}" disabled>
-                        <select></select>
-                    </select>`,
-                pending: () =>
-                    html`<select id="camera" @change="${this.handleCameraChange}" disabled>
-                        <select></select>
-                    </select>`,
-                complete: (value) => value,
-                error: (error) => {
-                    console.error(error);
-                    return html`<p>Oops, something went wrong: ${error}</p>`;
-                }
-            })}
+            <label for="view-layout">View Type:</lable>
+            <select
+                id="view-layout"
+                @change="${this.handleViewChange}"
+            >
+                <option value="${ViewLayout[ViewLayout.SingleView]}" ?selected=${this.viewLayout === ViewLayout.SingleView}>Single View</option>
+                <option value="${ViewLayout[ViewLayout.DoubleView]}" ?selected=${this.viewLayout === ViewLayout.DoubleView}>Double View</option>
+                <option value="${ViewLayout[ViewLayout.QuadView]}" ?selected=${this.viewLayout === ViewLayout.QuadView}>Quad View</option>
+            </select>
+
+            ${map(
+                this.selectedCamIds,
+                (cameraId, index) => html`
+                    <label for="camera-${index}">Camera ${index + 1}:</label>
+                    <select
+                        id="camera-${index}"
+                        @change="${(e: InputEvent) => this.handleCameraChange(e, index)}"
+                    >
+                        <option value="N/A" ?selected=${cameraId === ""}>No Camera Selected</option>
+                        ${map(
+                            this.availableCamNames,
+                            (camName) =>
+                                html`<option value="${camName}" ?selected=${camName === cameraId}>
+                                    ${camName}
+                                </option>`
+                        )}
+                    </select>
+                `
+            )}
         `;
     }
 
@@ -349,6 +399,56 @@ export class DvrUI extends LitElement {
         `;
     }
 
+    private renderPlayers() {
+        switch (this.viewLayout) {
+            case ViewLayout.SingleView:
+                return html`
+                    <player-component
+                        .selectedDate="${live(this.selectedDate)}"
+                        .selectedCameraId="${live(this.selectedCamIds[0])}"
+                    ></player-component>
+                `;
+            case ViewLayout.DoubleView:
+                return html`
+                    <div class="double-view">
+                        <player-component
+                            .selectedDate="${live(this.selectedDate)}"
+                            .selectedCameraId="${live(this.selectedCamIds[0])}"
+                        ></player-component>
+                        <player-component
+                            .selectedDate="${live(this.selectedDate)}"
+                            .selectedCameraId="${live(this.selectedCamIds[1])}"
+                        ></player-component>
+                    </div>
+                `;
+            case ViewLayout.QuadView:
+                return html`
+                    <div class="quad-view">
+                        <div class="quad-row">
+                            <player-component
+                                .selectedDate="${live(this.selectedDate)}"
+                                .selectedCameraId="${live(this.selectedCamIds[0])}"
+                            ></player-component>
+                            <player-component
+                                .selectedDate="${live(this.selectedDate)}"
+                                .selectedCameraId="${live(this.selectedCamIds[1])}"
+                            ></player-component>
+                        </div>
+                        <div class="quad-row">
+                            <player-component
+                                .selectedDate="${live(this.selectedDate)}"
+                                .selectedCameraId="${live(this.selectedCamIds[2])}"
+                            ></player-component>
+                            <player-component
+                                .selectedDate="${live(this.selectedDate)}"
+                                .selectedCameraId="${live(this.selectedCamIds[3])}"
+                            ></player-component>
+                        </div>
+                    </div>
+                `;
+        }
+    }
+
     // Render
     render() {
         return html`
@@ -360,10 +460,7 @@ export class DvrUI extends LitElement {
                         return html`
                             <h1>DVR UI</h1>
                             <div class="controls">${this.renderCameraControls()}</div>
-                            <player-component
-                                .selectedDate="${live(this.selectedDate)}"
-                                .selectedCameraId="${live(this.selectedCameraId)}"
-                            ></player-component>
+                            ${this.renderPlayers()}
                             <player-buttons></player-buttons>
                             ${this.renderTimeline()}
                         `;
